@@ -7,9 +7,9 @@ class Settings(BaseSettings):
     GCP_PROJECT_ID: str = os.getenv("GCP_PROJECT_ID", "crp-poc-it-hackathon-13")
     BQ_DATASET: str = os.getenv("BQ_DATASET", "lineage_metadata")
     
-    GCS_INBOX_BUCKET: str = os.getenv("GCS_INBOX_BUCKET", "lineage-inbox")
-    GCS_PROCESSED_BUCKET: str = os.getenv("GCS_PROCESSED_BUCKET", "lineage-processed")
-    GCS_QUARANTINE_BUCKET: str = os.getenv("GCS_QUARANTINE_BUCKET", "lineage-quarantine")
+    GCS_INBOX_BUCKET: str = os.getenv("GCS_INBOX_BUCKET", "datosdeentrada")
+    GCS_PROCESSED_BUCKET: str = os.getenv("GCS_PROCESSED_BUCKET", "datosprocesadosapp")
+    GCS_QUARANTINE_BUCKET: str = os.getenv("GCS_QUARANTINE_BUCKET", "datosquarentena")
     
     # Modo Local / Simulado si no hay credenciales GCP activas
     USE_MOCK_GCP: bool = os.getenv("USE_MOCK_GCP", "true").lower() in ("true", "1", "yes")

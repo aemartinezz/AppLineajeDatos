@@ -18,9 +18,9 @@ export const ConfigView: React.FC<ConfigViewProps> = ({ onBack }) => {
       advanced_temperature: 0.1,
     },
     storage_config: {
-      inbox_bucket: 'gs://lineage-inbox',
-      processed_bucket: 'gs://lineage-processed',
-      quarantine_bucket: 'gs://lineage-quarantine',
+      inbox_bucket: 'gs://datosdeentrada',
+      processed_bucket: 'gs://datosprocesadosapp',
+      quarantine_bucket: 'gs://datosquarentena',
       gcp_project_id: 'crp-poc-it-hackathon-13',
       bq_dataset: 'lineage_metadata',
     },

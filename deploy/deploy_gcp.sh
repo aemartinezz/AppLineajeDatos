@@ -4,9 +4,9 @@ set -e
 PROJECT_ID="crp-poc-it-hackathon-13"
 REGION="us-central1"
 BQ_DATASET="lineage_metadata"
-INBOX_BUCKET="lineage-inbox-${PROJECT_ID}"
-PROCESSED_BUCKET="lineage-processed-${PROJECT_ID}"
-QUARANTINE_BUCKET="lineage-quarantine-${PROJECT_ID}"
+INBOX_BUCKET="datosdeentrada"
+PROCESSED_BUCKET="datosprocesadosapp"
+QUARANTINE_BUCKET="datosquarentena"
 
 echo "================================================================="
 echo "  DESPLIEGUE AUTOMATIZADO E IDEMPOTENTE EN GOOGLE CLOUD (GCP)    "
