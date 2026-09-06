@@ -5,7 +5,7 @@ from app.models.schemas import AppConfig, ModelConfig, StorageConfig
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Lineage End-to-End & Observability"
     GCP_PROJECT_ID: str = os.getenv("GCP_PROJECT_ID", "crp-poc-it-hackathon-13")
-    BQ_DATASET: str = os.getenv("BQ_DATASET", "lineage_metadata")
+    BQ_DATASET: str = os.getenv("BQ_DATASET", "applineajedatos")
     
     GCS_INBOX_BUCKET: str = os.getenv("GCS_INBOX_BUCKET", "datosdeentrada")
     GCS_PROCESSED_BUCKET: str = os.getenv("GCS_PROCESSED_BUCKET", "datosprocesadosapp")

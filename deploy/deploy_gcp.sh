@@ -3,7 +3,7 @@ set -e
 
 PROJECT_ID="crp-poc-it-hackathon-13"
 REGION="us-central1"
-BQ_DATASET="lineage_metadata"
+BQ_DATASET="applineajedatos"
 INBOX_BUCKET="datosdeentrada"
 PROCESSED_BUCKET="datosprocesadosapp"
 QUARANTINE_BUCKET="datosquarentena"

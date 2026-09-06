@@ -22,7 +22,7 @@ export const ConfigView: React.FC<ConfigViewProps> = ({ onBack }) => {
       processed_bucket: 'gs://datosprocesadosapp',
       quarantine_bucket: 'gs://datosquarentena',
       gcp_project_id: 'crp-poc-it-hackathon-13',
-      bq_dataset: 'lineage_metadata',
+      bq_dataset: 'applineajedatos',
     },
     default_confidence_threshold: 0.80,
   });
