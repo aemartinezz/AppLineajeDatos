@@ -4,6 +4,23 @@ Plataforma empresarial en Google Cloud Platform (GCP) diseñada para descubrir, 
 
 ---
 
+## 🏛️ Sistema de Gobernanza y Directrices para Agentes de IA
+
+Este repositorio cuenta con un **sistema de gobernanza exhaustivo** obligatorio para cualquier agente de Inteligencia Artificial (especialmente Google Gemini / Antigravity) y desarrollador. Consulta los documentos maestros:
+
+* 🧭 [**Guía Maestra y Entrypoint (`gemini.md`)**](gemini.md)
+* 📜 [**Manifiesto y Reglas Operativas (`workflows/gemini.md`)**](workflows/gemini.md)
+* 🧠 [**Memoria y Registro de Decisiones de Arquitectura (`workflows/memory.md`)**](workflows/memory.md)
+* 🔒 [**Políticas de Seguridad y RBAC Liverpool (`workflows/security.md`)**](workflows/security.md)
+* 🧪 [**Protocolo y Suite de Pruebas (`workflows/testing.md`)**](workflows/testing.md)
+* 🎨 [**Estándares de Frontend y UX (`workflows/standards-frontend.md`)**](workflows/standards-frontend.md)
+* ⚙️ [**Estándares de Backend y Python (`workflows/standards-backend.md`)**](workflows/standards-backend.md)
+* 🏗️ [**Arquitectura Técnica Integral (`workflows/architecture.md`)**](workflows/architecture.md)
+* 📖 [**Diccionario de Datos BigQuery (`workflows/data-dictionary.md`)**](workflows/data-dictionary.md)
+* 🚀 [**Manual de Despliegue en GCP (`workflows/operations-deployment.md`)**](workflows/operations-deployment.md)
+
+---
+
 ## 1. Características Principales
 
 * **Detector Agnóstico de Herramientas:** Reconoce dinámicamente cualquier tecnología por extensión, firmas de contenido o inferencia semántica con IA.
