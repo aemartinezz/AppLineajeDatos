@@ -91,6 +91,29 @@ const relayoutVisibleElements = (
   const nodeCount = visibleNodes.length;
   const edgeCount = visibleEdges.length;
 
+  // Para 2, 3 o 4 componentes independientes (ej. DataStage con 2 jobs o Shell con 3 scripts),
+  // agruparlos juntos y centrados con espaciado natural (evitando vacíos de 800px entre ellos)
+  if (nodeCount <= 4 && edgeCount === 0) {
+    const centerX = cy.width() / 2;
+    const centerY = cy.height() / 2;
+    const spacingX = 260;
+    const totalWidth = (nodeCount - 1) * spacingX;
+    const startX = centerX - totalWidth / 2;
+
+    visibleNodes.forEach((node, idx) => {
+      node.animate({
+        position: { x: startX + idx * spacingX, y: centerY },
+      }, {
+        duration: 350,
+        easing: 'ease-in-out-cubic',
+      });
+    });
+    setTimeout(() => {
+      cy.fit(visibleNodes, 120);
+    }, 370);
+    return;
+  }
+
   // Si hay varios nodos con pocas o ninguna arista entre sí (ej. 76 tablas BigQuery o jobs desconectados),
   // se organizan en una cuadrícula rectangular armoniosa (Grid) en lugar de una lista vertical infinita.
   const isCatalog =
@@ -222,7 +245,7 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
       cy.batch(() => {
         cy.elements().show();
       });
-      relayoutVisibleElements(cy, 'dagre');
+      relayoutVisibleElements(cy);
       return;
     }
 
