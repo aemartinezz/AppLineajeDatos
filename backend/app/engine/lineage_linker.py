@@ -47,12 +47,54 @@ class LineageLinker:
             edge.id = f"{src}->{tgt}"
             edge_map[edge.id] = edge
 
-        # 5. El Puente de Fusión (Linkage Bridge):
-        # Si un nodo externo apunta a un nombre de tabla que coincide con una tabla de BigQuery,
-        # asegurar que la arista esté firmemente establecida.
-        for edge in edge_map.values():
-            if edge.target_id in node_map and edge.source_id in node_map:
-                pass # Conectado correctamente
+        # 5. El Puente de Fusión (Linkage Bridge) e Integridad Referencial Absoluta:
+        from app.models.schemas import ToolType
+        for edge in list(edge_map.values()):
+            # A. Resolver Target si falta
+            if edge.target_id not in node_map:
+                tgt_name = edge.target_id.split(":")[-1]
+                matched_id = None
+                for n_id in node_map.keys():
+                    if n_id.endswith(f".{tgt_name}") or n_id == f"BIGQUERY:{tgt_name}":
+                        matched_id = n_id
+                        break
+                if matched_id:
+                    edge.target_id = matched_id
+                else:
+                    parts = edge.target_id.split(":", 1)
+                    tool = parts[0] if len(parts) > 1 else "BIGQUERY"
+                    name = parts[1] if len(parts) > 1 else edge.target_id
+                    t_type = ToolType(tool) if tool in [t.value for t in ToolType] else ToolType.BIGQUERY
+                    synth_node = LineageNode(
+                        id=edge.target_id,
+                        name=name,
+                        tool_type=t_type,
+                        layer="STORAGE" if t_type == ToolType.BIGQUERY else "PROCESSING"
+                    )
+                    node_map[edge.target_id] = synth_node
+
+            # B. Resolver Source si falta
+            if edge.source_id not in node_map:
+                src_name = edge.source_id.split(":")[-1]
+                matched_id = None
+                for n_id in node_map.keys():
+                    if n_id.endswith(f".{src_name}") or n_id == f"SHELL:{src_name}":
+                        matched_id = n_id
+                        break
+                if matched_id:
+                    edge.source_id = matched_id
+                else:
+                    parts = edge.source_id.split(":", 1)
+                    tool = parts[0] if len(parts) > 1 else "GENERIC_TOOL"
+                    name = parts[1] if len(parts) > 1 else edge.source_id
+                    t_type = ToolType(tool) if tool in [t.value for t in ToolType] else ToolType.GENERIC_TOOL
+                    synth_node = LineageNode(
+                        id=edge.source_id,
+                        name=name,
+                        tool_type=t_type,
+                        layer="INGESTION" if "GCS" in edge.source_id or "INBOX" in edge.source_id else "PROCESSING"
+                    )
+                    node_map[edge.source_id] = synth_node
 
         nodes_list = list(node_map.values())
         edges_list = list(edge_map.values())

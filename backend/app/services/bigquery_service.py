@@ -319,11 +319,15 @@ class BigQueryService:
                 if n.id in connected_node_ids or n.tool_type == ToolType.BIGQUERY or len(filtered_edges) == 0
             ]
 
+        # Garantizar integridad referencial estricta (0 aristas huérfanas)
+        node_ids_set = {n.id for n in filtered_nodes}
+        safe_edges = [e for e in filtered_edges if e.source_id in node_ids_set and e.target_id in node_ids_set]
+
         return LineageGraph(
             nodes=filtered_nodes,
-            edges=filtered_edges,
+            edges=safe_edges,
             total_nodes=len(filtered_nodes),
-            total_edges=len(filtered_edges),
+            total_edges=len(safe_edges),
             execution_date=full_graph.execution_date
         )
 

@@ -126,8 +126,42 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
   const renderCytoscape = (nodes: NodeData[], edges: EdgeData[]) => {
     if (!containerRef.current) return;
 
+    // 1. Integridad Referencial: Garantizar que cada arista tenga sus nodos fuente y destino
+    const nodeMap = new Map<string, NodeData>(nodes.map((n) => [n.id, n]));
+
+    edges.forEach((e) => {
+      if (!nodeMap.has(e.source_id)) {
+        const parts = e.source_id.split(':');
+        const tool = parts.length > 1 ? parts[0] : 'GENERIC_TOOL';
+        const name = parts.length > 1 ? parts.slice(1).join(':') : e.source_id;
+        nodeMap.set(e.source_id, {
+          id: e.source_id,
+          name: name,
+          tool_type: tool,
+          layer: 'PROCESSING',
+          status: 'SUCCESS'
+        });
+      }
+      if (!nodeMap.has(e.target_id)) {
+        const parts = e.target_id.split(':');
+        const tool = parts.length > 1 ? parts[0] : 'BIGQUERY';
+        const name = parts.length > 1 ? parts.slice(1).join(':') : e.target_id;
+        nodeMap.set(e.target_id, {
+          id: e.target_id,
+          name: name,
+          tool_type: tool,
+          layer: tool === 'BIGQUERY' ? 'STORAGE' : 'PROCESSING',
+          status: 'SUCCESS'
+        });
+      }
+    });
+
+    const safeNodes = Array.from(nodeMap.values());
+    const validNodeIds = new Set(safeNodes.map((n) => n.id));
+    const safeEdges = edges.filter((e) => validNodeIds.has(e.source_id) && validNodeIds.has(e.target_id));
+
     const elements: cytoscape.ElementDefinition[] = [
-      ...nodes.map((n) => {
+      ...safeNodes.map((n) => {
         let statusColor = '#9CA3AF'; // PENDING (Gris)
         if (n.status === 'SUCCESS') statusColor = '#2E7D32'; // OK (Verde)
         if (n.status === 'RUNNING') statusColor = '#0284C7'; // RUNNING (Azul)
@@ -143,7 +177,7 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
           },
         };
       }),
-      ...edges.map((e) => ({
+      ...safeEdges.map((e) => ({
         data: {
           id: e.id,
           source: e.source_id,
@@ -160,85 +194,100 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
       cyRef.current.destroy();
     }
 
-    const cy = cytoscape({
-      container: containerRef.current,
-      elements: elements,
-      wheelSensitivity: 0.12, // Zoom suave, sin saltos bruscos
-      minZoom: 0.25,          // Límite mínimo para no perder el grafo
-      maxZoom: 2.2,           // Límite máximo para no pixelar
-      style: [
-        {
-          selector: 'node',
-          style: {
-            'shape': 'round-rectangle',
-            'background-color': '#FFFFFF',
-            'border-width': 2.5,
-            'border-color': 'data(statusColor)',
-            'label': 'data(label)',
-            'color': '#1F2937',
-            'font-size': '11px',
-            'font-weight': 'bold',
-            'text-valign': 'center',
-            'text-halign': 'center',
-            'text-wrap': 'wrap',
-            'text-max-width': '125px',
-            'width': '145px',
-            'height': '65px',
-            'box-shadow': '0 2px 5px rgba(0,0,0,0.06)',
-          } as any,
-        },
-        {
-          selector: 'node:selected',
-          style: {
-            'border-width': 4,
-            'border-color': '#731853',
-            'background-color': '#FAF0F5',
+    try {
+      const cy = cytoscape({
+        container: containerRef.current,
+        elements: elements,
+        wheelSensitivity: 0.2, // Zoom suave, sin saltos bruscos
+        minZoom: 0.15,         // Límite mínimo amplio para ver todo el grafo
+        maxZoom: 2.5,          // Límite máximo para no pixelar
+        style: [
+          {
+            selector: 'node',
+            style: {
+              'shape': 'round-rectangle',
+              'background-color': '#FFFFFF',
+              'border-width': 2.5,
+              'border-color': 'data(statusColor)',
+              'label': 'data(label)',
+              'color': '#1F2937',
+              'font-size': '11px',
+              'font-weight': 'bold',
+              'text-valign': 'center',
+              'text-halign': 'center',
+              'text-wrap': 'wrap',
+              'text-max-width': '125px',
+              'width': '145px',
+              'height': '65px',
+            } as any,
           },
-        },
-        {
-          selector: 'edge',
-          style: {
-            'width': 2,
-            'line-color': '#9CA3AF',
-            'target-arrow-color': '#9CA3AF',
-            'target-arrow-shape': 'triangle',
-            'curve-style': 'bezier',
-            'label': 'data(label)',
-            'font-size': '10px',
-            'font-weight': 'bold',
-            'color': '#731853',
-            'text-background-color': '#FAF0F5',
-            'text-background-opacity': 0.9,
-            'text-background-padding': '2px',
-            'line-style': (ele: any) => (ele.data('isDashed') ? 'dashed' : 'solid'),
+          {
+            selector: 'node:selected',
+            style: {
+              'border-width': 4,
+              'border-color': '#731853',
+              'background-color': '#FAF0F5',
+            },
           },
+          {
+            selector: 'edge',
+            style: {
+              'width': 2,
+              'line-color': '#9CA3AF',
+              'target-arrow-color': '#9CA3AF',
+              'target-arrow-shape': 'triangle',
+              'curve-style': 'bezier',
+              'label': 'data(label)',
+              'font-size': '10px',
+              'font-weight': 'bold',
+              'color': '#731853',
+              'text-background-color': '#FAF0F5',
+              'text-background-opacity': 0.9,
+              'text-background-padding': '2px',
+              'line-style': (ele: any) => (ele.data('isDashed') ? 'dashed' : 'solid'),
+            },
+          },
+        ],
+        layout: {
+          name: 'dagre',
+          // @ts-ignore
+          rankDir: 'LR',
+          nodeSep: 45,
+          rankSep: 80,
         },
-      ],
-      layout: {
-        name: 'dagre',
-        // @ts-ignore
-        rankDir: 'LR', // De izquierda a derecha
-        nodeSep: 50,
-        rankSep: 85,
-      },
-    });
+      });
 
-    cy.on('tap', 'node', (evt) => {
-      const nodeData = evt.target.data('nodeRaw');
-      if (nodeData) {
-        onSelectNode(nodeData);
-      }
-    });
+      cy.on('tap', 'node', (evt) => {
+        const nodeData = evt.target.data('nodeRaw');
+        if (nodeData) {
+          onSelectNode(nodeData);
+        }
+      });
 
-    cyRef.current = cy;
+      cyRef.current = cy;
 
-    // Asegurar centrado y ajuste automático tras el cálculo del layout
-    setTimeout(() => {
-      if (cyRef.current) {
-        cyRef.current.resize();
-        cyRef.current.fit(undefined, 40);
-      }
-    }, 150);
+      // Asegurar centrado y ajuste automático tras el cálculo del layout
+      setTimeout(() => {
+        if (cyRef.current) {
+          cyRef.current.resize();
+          cyRef.current.fit(undefined, 40);
+        }
+      }, 200);
+    } catch (renderError) {
+      console.error("Fallo con layout dagre, aplicando fallback a layout cose:", renderError);
+      const fallbackCy = cytoscape({
+        container: containerRef.current,
+        elements: elements,
+        layout: { name: 'cose', animate: false },
+      });
+      cyRef.current = fallbackCy;
+      setTimeout(() => {
+        if (cyRef.current) {
+          cyRef.current.resize();
+          cyRef.current.fit(undefined, 40);
+        }
+      }, 200);
+    }
   };
 
   // Conexión a WebSocket para telemetría en tiempo real y listeners de ventana
@@ -343,7 +392,7 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
   };
 
   return (
-    <div style={{ position: 'relative', width: '100%', height: 'calc(100vh - 140px)', backgroundColor: '#F8F9FA' }}>
+    <div style={{ position: 'relative', width: '100%', height: 'calc(100vh - 120px)', minHeight: '700px', backgroundColor: '#F8F9FA' }}>
       <style>{`
         .faded { opacity: 0.15 !important; }
         .info-btn { 

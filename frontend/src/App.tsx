@@ -147,10 +147,10 @@ export const App: React.FC = () => {
       />
 
       {/* Contenido Principal según el Tab Seleccionado */}
-      <main style={{ flex: 1, position: 'relative' }}>
+      <main style={{ flex: 1, position: 'relative', display: 'flex', flexDirection: 'column' }}>
         {/* TAB 1: Grafo de Linaje (Visible para TODOS los roles) */}
         {activeTab === 'grafo' && (
-          <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+          <div style={{ position: 'relative', width: '100%', flex: 1, minHeight: 'calc(100vh - 64px)' }}>
             <LineageGraphView onSelectNode={(node) => setSelectedNode(node)} />
             <NodeInspectorDrawer node={selectedNode} onClose={() => setSelectedNode(null)} />
           </div>
