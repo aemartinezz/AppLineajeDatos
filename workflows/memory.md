@@ -20,6 +20,7 @@ Este documento constituye la **memoria viva del proyecto**. Registra todas las d
 - **ADR-012:** Introspección de Arquitectura Viva con Clasificación por Capas y Módulos Web
 - **ADR-013:** Aislamiento Bidireccional de Subgrafos y Operaciones Atómicas en Batch de Cytoscape
 - **ADR-014:** Estrategia de Rendimiento y Tuneo: Pre-Cálculo y Persistencia de Linaje en BigQuery
+- **ADR-015:** Aislamiento Canónico de Tareas Airflow por DAG y Blindaje Estricto Anti-Colisión de Linaje
 
 ---
 
@@ -180,4 +181,16 @@ Este documento constituye la **memoria viva del proyecto**. Registra todas las d
   - La API de consulta `/api/lineage/graph` lee el grafo ya materializado desde la base de datos con latencia < 80 ms.
   - El frontend cachea la estructura en memoria y solo aplica transiciones de visualización.
 - **Impacto:** Experiencia ultra-rápida para los usuarios, bajo consumo de recursos en Cloud Run y reducción de consultas redundantes a BigQuery.
+
+---
+
+### ADR-015: Aislamiento Canónico de Tareas Airflow por DAG y Blindaje Estricto Anti-Colisión de Linaje
+
+- **Contexto:** En Apache Airflow es habitual y estándar que múltiples DAGs contengan tareas con el mismo nombre (`task_id="cargar_csv_a_bigquery"`). El motor previo utilizaba como ID de nodo únicamente `AIRFLOW_COMPOSER:{task_id}` sin calificar por el DAG (`dag_id`), provocando que tareas homónimas de flujos independientes (ej. `dag_carga_ejemplotabla1` vs `dag_carga_ejemplotabla2`) colisionaran en un único nodo y fusionaran sus aristas, creando falsas conexiones cruzadas hacia tablas no relacionadas con 100% de confianza. Paralelamente, existía un residuo mock en `bigquery_metadata.py` que inyectaba forzosamente la arista `DATASTAGE:DS_LOAD_STAGING -> BIGQUERY:pruebasLineaje.ejemplotabla1`.
+- **Decisión:**
+  1. **Espacio de Nombres Calificado:** En `cascade_pipeline.py`, todo nodo de tarea de Airflow se genera bajo el formato canónico calificado `AIRFLOW_COMPOSER:{dag_id}.{task_id}` (ej. `AIRFLOW_COMPOSER:dag_carga_ejemplotabla1.cargar_csv_a_bigquery`), garantizando aislamiento matemático total entre pipelines paralelos.
+  2. **Eliminación Total de Inyecciones Hardcodeadas:** Se suprimió definitivamente el mock de DataStage en `bigquery_metadata.py`, tanto en modo real como en modo emulado.
+  3. **Purga y Rehidratación Limpia en BigQuery:** Se implementó el método `reset_lineage_tables()` y el endpoint administrativo `POST /api/lineage/reset` que ejecuta `DELETE FROM lineage_edges WHERE TRUE` y `DELETE FROM lineage_nodes WHERE TRUE` en BigQuery, reinicia la memoria y permite la reconstrucción limpia e impoluta del linaje con el endpoint `POST /api/lineage/reprocess-all`.
+  4. **Adaptación del Algoritmo de Proximidad Frontend:** Se integraron los identificadores calificados en `PREFERRED_PIPELINE_ORDER` en `LineageGraphView.tsx`, asegurando que cada DAG y tarea se posicione adyacente a sus tablas destino en la cuadrícula ortogonal.
+- **Impacto:** Eliminación total y permanente de relaciones falsas, separación estricta de responsabilidades entre flujos ETL/ELT y certidumbre matemática del 100% en el linaje visualizado.
 
