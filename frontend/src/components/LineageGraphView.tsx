@@ -77,6 +77,179 @@ const formatNodeBox = (toolType: string, rawName: string) => {
   return { label, nodeWidth, nodeHeight, textMaxWidth };
 };
 
+// Algoritmo de Proximidad Dashboard: Organiza la pipeline de jobs en la Fila 0 y coloca
+// sus tablas/archivos conectados directamente debajo en la Fila 1 (distancia vertical mínima de 1 celda),
+// rellenando armoniosamente el resto de la cuadrícula con el catálogo de BigQuery sin cruces de aristas.
+const layoutProximityDashboard = (
+  cy: cytoscape.Core,
+  visibleNodes: cytoscape.NodeCollection,
+  visibleEdges: cytoscape.EdgeCollection,
+  cols: number = 10
+) => {
+  const connectedNodeIds = new Set<string>();
+  const targetsOf = new Map<string, string[]>();
+  const sourcesOf = new Map<string, string[]>();
+
+  visibleEdges.forEach((edge) => {
+    const s = edge.data('source');
+    const t = edge.data('target');
+    if (s && t) {
+      connectedNodeIds.add(s);
+      connectedNodeIds.add(t);
+      if (!targetsOf.has(s)) targetsOf.set(s, []);
+      targetsOf.get(s)!.push(t);
+      if (!sourcesOf.has(t)) sourcesOf.set(t, []);
+      sourcesOf.get(t)!.push(s);
+    }
+  });
+
+  // Orden secuencial preferido para la pipeline principal de jobs en Fila 0
+  const PREFERRED_PIPELINE_ORDER = [
+    'CONTROL_M:JOB_DIARIO_VENTAS',
+    'SHELL:extract_oracle.sh',
+    'DATASTAGE:DS_LOAD_STAGING',
+    'AIRFLOW_COMPOSER:dag_ventas_analytics',
+    'SHELL:clean_staging_logs.sh',
+    'DATASTAGE:DS_ENRICH_CLIENTES',
+    'SHELL:lanzar_carga_ejemplotabla1.sh',
+    'AIRFLOW_COMPOSER:dag_carga_ejemplotabla1',
+    'AIRFLOW_COMPOSER:dag_carga_ejemplotabla1.cargar_csv_a_bigquery',
+    'AIRFLOW_COMPOSER:cargar_csv_a_bigquery',
+    'BIGQUERY:pruebasLineaje.ejemplotabla1',
+  ];
+
+  const connectedNodes = visibleNodes.filter((n) => connectedNodeIds.has(n.id()));
+  const pipelineNodes: cytoscape.NodeSingular[] = [];
+  const placedIds = new Set<string>();
+
+  // 1. Extraer jobs de pipeline en el orden preferido
+  for (const pid of PREFERRED_PIPELINE_ORDER) {
+    const matching = connectedNodes.filter((n) => n.id() === pid && !placedIds.has(n.id()));
+    if (matching.length > 0) {
+      pipelineNodes.push(matching[0]);
+      placedIds.add(pid);
+    }
+  }
+
+  // Si hay más nodos de pipeline/orquestación no listados explícitamente:
+  connectedNodes.forEach((n) => {
+    const tool = n.data('tool_type');
+    if (['CONTROL_M', 'SHELL', 'DATASTAGE', 'AIRFLOW_COMPOSER'].includes(tool) && !placedIds.has(n.id())) {
+      pipelineNodes.push(n);
+      placedIds.add(n.id());
+    }
+  });
+
+  const gridPositions = new Map<string, { row: number; col: number }>();
+  const occupiedCells = new Set<string>();
+
+  // 2. Asignar Fila 0 a los nodos del pipeline (hasta 'cols' columnas)
+  pipelineNodes.slice(0, cols).forEach((pNode, colIdx) => {
+    gridPositions.set(pNode.id(), { row: 0, col: colIdx });
+    occupiedCells.add(`0,${colIdx}`);
+  });
+
+  // 3. Colocar tablas/archivos destino inmediatamente debajo de su emisor en la misma columna (Fila 1)
+  pipelineNodes.slice(0, cols).forEach((pNode, colIdx) => {
+    // Buscar targets (ej. DS_LOAD_STAGING -> stg_transacciones_raw)
+    const targets = targetsOf.get(pNode.id()) || [];
+    for (const targetId of targets) {
+      if (!placedIds.has(targetId)) {
+        let targetRow = 1;
+        while (occupiedCells.has(`${targetRow},${colIdx}`)) {
+          targetRow++;
+        }
+        gridPositions.set(targetId, { row: targetRow, col: colIdx });
+        occupiedCells.add(`${targetRow},${colIdx}`);
+        placedIds.add(targetId);
+      }
+    }
+    // Buscar sources (ej. ejemplotabla1_20260907.csv -> pruebasLineaje.ejemplotabla1)
+    const sources = sourcesOf.get(pNode.id()) || [];
+    for (const sourceId of sources) {
+      if (!placedIds.has(sourceId)) {
+        let targetRow = 1;
+        while (occupiedCells.has(`${targetRow},${colIdx}`)) {
+          targetRow++;
+        }
+        gridPositions.set(sourceId, { row: targetRow, col: colIdx });
+        occupiedCells.add(`${targetRow},${colIdx}`);
+        placedIds.add(sourceId);
+      }
+    }
+  });
+
+  // Si aún quedan nodos conectados sin colocar (ej. pipelines con más de 10 columnas)
+  connectedNodes.forEach((n) => {
+    if (!placedIds.has(n.id())) {
+      let r = 1;
+      let c = 0;
+      while (occupiedCells.has(`${r},${c}`)) {
+        c++;
+        if (c >= cols) {
+          c = 0;
+          r++;
+        }
+      }
+      gridPositions.set(n.id(), { row: r, col: c });
+      occupiedCells.add(`${r},${c}`);
+      placedIds.add(n.id());
+    }
+  });
+
+  // 4. Rellenar las celdas restantes con las tablas de catálogo desconectadas (BigQuery)
+  const isolatedNodes = visibleNodes.filter((n) => !placedIds.has(n.id())).sort((a, b) => {
+    const nameA = a.data('name') || a.id();
+    const nameB = b.data('name') || b.id();
+    return nameA.localeCompare(nameB);
+  });
+
+  let curRow = 1;
+  let curCol = 0;
+
+  isolatedNodes.forEach((node) => {
+    while (occupiedCells.has(`${curRow},${curCol}`)) {
+      curCol++;
+      if (curCol >= cols) {
+        curCol = 0;
+        curRow++;
+      }
+    }
+    gridPositions.set(node.id(), { row: curRow, col: curCol });
+    occupiedCells.add(`${curRow},${curCol}`);
+    curCol++;
+    if (curCol >= cols) {
+      curCol = 0;
+      curRow++;
+    }
+  });
+
+  // 5. Calcular coordenadas espaciales centradas y animar fluidamente
+  const totalRows = curRow + 1;
+  const spacingX = 270;
+  const spacingY = 115;
+  const startX = -((cols - 1) * spacingX) / 2;
+  const startY = -((totalRows - 1) * spacingY) / 2;
+
+  visibleNodes.forEach((node) => {
+    const pos = gridPositions.get(node.id());
+    if (pos) {
+      const targetX = startX + pos.col * spacingX;
+      const targetY = startY + pos.row * spacingY;
+      node.animate({
+        position: { x: targetX, y: targetY },
+      }, {
+        duration: 350,
+        easing: 'ease-in-out-cubic',
+      });
+    }
+  });
+
+  setTimeout(() => {
+    cy.fit(visibleNodes, 45);
+  }, 380);
+};
+
 // Motor de Re-layout Adaptativo para organizar armónicamente los nodos visibles
 const relayoutVisibleElements = (
   cy: cytoscape.Core,
@@ -114,7 +287,19 @@ const relayoutVisibleElements = (
     return;
   }
 
-  // Si hay varios nodos con pocas o ninguna arista entre sí (ej. 76 tablas BigQuery o jobs desconectados),
+  // Caso Dashboard con Pipeline conectado + Catálogo de BigQuery (Vista "Todas" o grafos mixtos)
+  const isDashboardProximity =
+    preferredLayout !== 'dagre' &&
+    nodeCount > 10 &&
+    edgeCount > 0 &&
+    edgeCount / nodeCount < 0.35;
+
+  if (isDashboardProximity) {
+    layoutProximityDashboard(cy, visibleNodes, visibleEdges, 10);
+    return;
+  }
+
+  // Si hay varios nodos con pocas o ninguna arista entre sí (ej. 76 tablas BigQuery aisladas),
   // se organizan en una cuadrícula rectangular armoniosa (Grid) en lugar de una lista vertical infinita.
   const isCatalog =
     preferredLayout === 'grid' ||
@@ -126,9 +311,6 @@ const relayoutVisibleElements = (
 
   if (isCatalog) {
     // Proporción rectangular apaisada (similar a 16:9 / 4:3)
-    // Para 76 tablas: cols = 9 o 10 (9 columnas x 8-9 filas)
-    // Para 2 jobs DataStage: cols = 2 (2 side-by-side)
-    // Para 3 scripts Shell: cols = 3 (3 side-by-side)
     const cols = Math.min(10, Math.max(2, Math.ceil(Math.sqrt(nodeCount * 1.6))));
     layoutOptions = {
       name: 'grid',
@@ -142,7 +324,7 @@ const relayoutVisibleElements = (
       animationEasing: 'ease-in-out-cubic',
     };
   } else {
-    // Para pipelines y linajes conectados: Layout jerárquico Dagre de izquierda a derecha
+    // Para pipelines y linajes conectados específicos: Layout jerárquico Dagre de izquierda a derecha
     layoutOptions = {
       name: 'dagre',
       // @ts-ignore
@@ -421,13 +603,13 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
 
       cyRef.current = cy;
 
-      // Asegurar centrado y ajuste automático tras el cálculo del layout
+      // Asegurar centrado y ajuste automático tras el cálculo del layout adaptativo
       setTimeout(() => {
         if (cyRef.current) {
           cyRef.current.resize();
-          cyRef.current.fit(undefined, 40);
+          relayoutVisibleElements(cyRef.current);
         }
-      }, 200);
+      }, 150);
     } catch (renderError) {
       console.error("Fallo con layout dagre, aplicando fallback a layout cose:", renderError);
       const fallbackCy = cytoscape({
@@ -439,9 +621,9 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
       setTimeout(() => {
         if (cyRef.current) {
           cyRef.current.resize();
-          cyRef.current.fit(undefined, 40);
+          relayoutVisibleElements(cyRef.current);
         }
-      }, 200);
+      }, 150);
     }
   };
 
@@ -584,7 +766,7 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
         cy.batch(() => {
           cy.elements().show();
         });
-        relayoutVisibleElements(cy, 'dagre');
+        relayoutVisibleElements(cy);
       }
     }
     setLineageMode('NONE');
