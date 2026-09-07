@@ -218,21 +218,48 @@ const layoutProximityDashboard = (
     }
   });
 
-  // Si aún quedan nodos conectados sin colocar
+  // Si aún quedan nodos conectados sin colocar (ej. vistas dependientes de tablas base)
   connectedNodes.forEach((n) => {
     if (!placedIds.has(n.id())) {
-      let r = 1;
-      let c = 0;
-      while (occupiedCells.has(`${r},${c}`)) {
-        c++;
-        if (c >= cols) {
-          c = 0;
-          r++;
+      let placedNear = false;
+      const sources = sourcesOf.get(n.id()) || [];
+      for (const sId of sources) {
+        if (placedIds.has(sId)) {
+          const sPos = gridPositions.get(sId);
+          if (sPos) {
+            const candPositions = [
+              { row: sPos.row, col: sPos.col + 1 },
+              { row: sPos.row + 1, col: sPos.col },
+              { row: sPos.row + 1, col: sPos.col + 1 }
+            ];
+            for (const cp of candPositions) {
+              if (cp.col < cols && !occupiedCells.has(`${cp.row},${cp.col}`)) {
+                gridPositions.set(n.id(), cp);
+                occupiedCells.add(`${cp.row},${cp.col}`);
+                placedIds.add(n.id());
+                placedNear = true;
+                break;
+              }
+            }
+          }
         }
+        if (placedNear) break;
       }
-      gridPositions.set(n.id(), { row: r, col: c });
-      occupiedCells.add(`${r},${c}`);
-      placedIds.add(n.id());
+
+      if (!placedNear) {
+        let r = 1;
+        let c = 0;
+        while (occupiedCells.has(`${r},${c}`)) {
+          c++;
+          if (c >= cols) {
+            c = 0;
+            r++;
+          }
+        }
+        gridPositions.set(n.id(), { row: r, col: c });
+        occupiedCells.add(`${r},${c}`);
+        placedIds.add(n.id());
+      }
     }
   });
 
