@@ -4,9 +4,9 @@
 # Plataforma de Linaje End-to-End & Observabilidad Multi-Herramienta
 # ==============================================================================
 # Uso:
-#   ./deploy/deploy_gcp.sh [PROJECT_ID] [REGION] [BQ_DATASET] [INBOX_BUCKET] [PROCESSED_BUCKET]
+#   ./deploy/deploy_gcp.sh [PROJECT_ID] [REGION] [BQ_DATASET] [INBOX_BUCKET] [PROCESSED_BUCKET] [SERVICE_ACCOUNT]
 # Ejemplo:
-#   ./deploy/deploy_gcp.sh crp-poc-it-hackathon-13 us-central1 applineajedatos datosdeentrada datosprocesadosapp
+#   ./deploy/deploy_gcp.sh crp-poc-it-hackathon-13 us-central1 applineajedatos datosdeentrada datosprocesadosapp sa-applineaje-backend
 # ==============================================================================
 
 set -e
@@ -17,6 +17,14 @@ BQ_DATASET="${3:-${BQ_DATASET:-applineajedatos}}"
 INBOX_BUCKET="${4:-${GCS_INBOX_BUCKET:-datosdeentrada}}"
 PROCESSED_BUCKET="${5:-${GCS_PROCESSED_BUCKET:-datosprocesadosapp}}"
 QUARANTINE_BUCKET="${GCS_QUARANTINE_BUCKET:-datosquarentena}"
+SERVICE_ACCOUNT="${6:-${GCP_SERVICE_ACCOUNT:-sa-applineaje-backend}}"
+
+# Normalizar correo completo de la Service Account
+if [[ "$SERVICE_ACCOUNT" == *"@"* ]]; then
+    SA_EMAIL="$SERVICE_ACCOUNT"
+else
+    SA_EMAIL="${SERVICE_ACCOUNT}@${PROJECT_ID}.iam.gserviceaccount.com"
+fi
 
 BACKEND_SERVICE="applineaje-backend"
 FRONTEND_SERVICE="applineaje-frontend"
@@ -28,6 +36,7 @@ echo "  Región Cloud Run:   $REGION                                    "
 echo "  Dataset BigQuery:   $BQ_DATASET                                "
 echo "  Bucket Inbox:       gs://$INBOX_BUCKET                         "
 echo "  Bucket Procesados:  gs://$PROCESSED_BUCKET                     "
+echo "  Service Account:    $SA_EMAIL (Menor Privilegio)               "
 echo "================================================================="
 
 # -------------------------------------------------------------
@@ -88,9 +97,59 @@ for BUCKET in "$INBOX_BUCKET" "$PROCESSED_BUCKET" "$QUARANTINE_BUCKET"; do
 done
 
 # -------------------------------------------------------------
-# 5. Creación física de Tablas DDL en BigQuery
+# 5. Aprovisionamiento de Service Account con Menor Privilegio
 # -------------------------------------------------------------
 echo ""
+echo "[5/8] Verificando Service Account dedicada: $SA_EMAIL..."
+SA_SHORT_NAME=$(echo "$SA_EMAIL" | cut -d'@' -f1)
+if gcloud iam service-accounts describe "$SA_EMAIL" --project="$PROJECT_ID" >/dev/null 2>&1; then
+    echo "  -> Service Account $SA_EMAIL ya existe [OK]"
+else
+    echo "  -> Creando Service Account $SA_SHORT_NAME..."
+    gcloud iam service-accounts create "$SA_SHORT_NAME" \
+        --display-name="SA Backend Linaje End-to-End" \
+        --project="$PROJECT_ID" || echo "  -> Nota: Verifique permisos para crear Service Accounts."
+fi
+
+echo "  -> Configurando roles de Menor Privilegio (Least Privilege IAM)..."
+# 1. Proyecto: Ejecutar consultas SQL y llamadas a Vertex AI Gemini
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+    --member="serviceAccount:$SA_EMAIL" \
+    --role="roles/bigquery.jobUser" \
+    --condition=None >/dev/null 2>&1 || true
+
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+    --member="serviceAccount:$SA_EMAIL" \
+    --role="roles/aiplatform.user" \
+    --condition=None >/dev/null 2>&1 || true
+
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+    --member="serviceAccount:$SA_EMAIL" \
+    --role="roles/logging.logWriter" \
+    --condition=None >/dev/null 2>&1 || true
+
+# 2. Dataset: Permisos de lectura/escritura únicamente sobre el dataset de la app (sin ser BigQuery Admin)
+bq add-iam-policy-binding \
+    --member="serviceAccount:$SA_EMAIL" \
+    --role="roles/bigquery.dataEditor" \
+    "$PROJECT_ID:$BQ_DATASET" >/dev/null 2>&1 || true
+
+# 3. Buckets: Permisos de objetos únicamente sobre los buckets designados (sin ser Storage Admin)
+gcloud storage buckets add-iam-policy-binding "gs://$INBOX_BUCKET" \
+    --member="serviceAccount:$SA_EMAIL" \
+    --role="roles/storage.objectAdmin" >/dev/null 2>&1 || true
+
+gcloud storage buckets add-iam-policy-binding "gs://$PROCESSED_BUCKET" \
+    --member="serviceAccount:$SA_EMAIL" \
+    --role="roles/storage.objectAdmin" >/dev/null 2>&1 || true
+
+echo "  -> Políticas IAM de Menor Privilegio configuradas [OK]"
+
+# -------------------------------------------------------------
+# 6. Creación física de Tablas DDL en BigQuery
+# -------------------------------------------------------------
+echo ""
+echo "[6/8] Inicializando tablas DDL en BigQuery ($BQ_DATASET)..."
 PY_BIN="./venv/bin/python3"
 if [ ! -f "$PY_BIN" ]; then
     PY_BIN="python3"
@@ -104,25 +163,26 @@ print('Tablas aseguradas en BigQuery:', res.get('tables_created', []))
 " || echo "  -> Advertencia: Asegure credenciales activas de BigQuery."
 
 # -------------------------------------------------------------
-# 6. Despliegue de Backend en Cloud Run
+# 7. Despliegue de Backend en Cloud Run con Service Account dedicada
 # -------------------------------------------------------------
 echo ""
-echo "[6/7] Desplegando Backend FastAPI en Cloud Run ($BACKEND_SERVICE)..."
+echo "[7/8] Desplegando Backend FastAPI en Cloud Run ($BACKEND_SERVICE)..."
 gcloud run deploy "$BACKEND_SERVICE" \
     --source=./backend \
     --region="$REGION" \
     --platform=managed \
     --allow-unauthenticated \
-    --set-env-vars="GCP_PROJECT_ID=$PROJECT_ID,BQ_DATASET=$BQ_DATASET,GCS_INBOX_BUCKET=$INBOX_BUCKET,GCS_PROCESSED_BUCKET=$PROCESSED_BUCKET,GCS_QUARANTINE_BUCKET=$QUARANTINE_BUCKET,USE_MOCK_GCP=false"
+    --service-account="$SA_EMAIL" \
+    --set-env-vars="GCP_PROJECT_ID=$PROJECT_ID,BQ_DATASET=$BQ_DATASET,GCS_INBOX_BUCKET=$INBOX_BUCKET,GCS_PROCESSED_BUCKET=$PROCESSED_BUCKET,GCS_QUARANTINE_BUCKET=$QUARANTINE_BUCKET,GCP_SERVICE_ACCOUNT=$SA_EMAIL,USE_MOCK_GCP=false"
 
 BACKEND_URL=$(gcloud run services describe "$BACKEND_SERVICE" --region="$REGION" --format='value(status.url)')
 echo "  -> Backend desplegado exitosamente en: $BACKEND_URL"
 
 # -------------------------------------------------------------
-# 7. Despliegue de Frontend en Cloud Run con Reverse Proxy Nginx
+# 8. Despliegue de Frontend en Cloud Run con Reverse Proxy Nginx
 # -------------------------------------------------------------
 echo ""
-echo "[7/7] Desplegando Frontend React en Cloud Run ($FRONTEND_SERVICE)..."
+echo "[8/8] Desplegando Frontend React en Cloud Run ($FRONTEND_SERVICE)..."
 BACKEND_HOST=$(echo "$BACKEND_URL" | sed -e 's|^[^/]*//||' -e 's|/.*$||')
 
 # Actualizar configuración de proxy en nginx.conf

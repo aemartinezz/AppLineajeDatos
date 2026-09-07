@@ -2,7 +2,7 @@ import os
 import json
 from datetime import datetime
 from google.cloud import bigquery
-from google.api_core.exceptions import NotFound, Conflict
+from google.api_core.exceptions import NotFound, Conflict, Forbidden
 from app.config import settings, current_app_config
 
 DDL_LINEAGE_NODES = """
@@ -132,15 +132,22 @@ def init_bigquery_tables(project_id: str = None, dataset_id: str = None) -> dict
     try:
         client = bigquery.Client(project=proj)
         
-        # 1. Asegurar dataset
+        # 1. Asegurar dataset (tolerante a Least Privilege IAM)
         dataset_ref = f"{proj}.{ds}"
         try:
             client.get_dataset(dataset_ref)
         except NotFound:
-            dataset = bigquery.Dataset(dataset_ref)
-            dataset.location = settings.GCP_REGION
-            client.create_dataset(dataset, timeout=30)
-            results["dataset_created"] = dataset_ref
+            try:
+                dataset = bigquery.Dataset(dataset_ref)
+                dataset.location = settings.GCP_REGION
+                client.create_dataset(dataset, timeout=30)
+                results["dataset_created"] = dataset_ref
+            except Forbidden as f_err:
+                print(f"Aviso Menor Privilegio: Sin permiso para crear dataset {dataset_ref} a nivel proyecto ({f_err}). Continuando asumiendo dataset pre-creado...")
+        except Forbidden as f_get_err:
+            print(f"Aviso Menor Privilegio: Permiso restringido en get_dataset ({f_get_err}). Continuando con DDLs...")
+        except Exception as e_ds:
+            print(f"Aviso comprobando dataset {dataset_ref}: {e_ds}")
             
         # 2. Ejecutar DDLs
         ddls = {

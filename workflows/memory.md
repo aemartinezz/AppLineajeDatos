@@ -22,6 +22,7 @@ Este documento constituye la **memoria viva del proyecto**. Registra todas las d
 - **ADR-014:** Estrategia de Rendimiento y Tuneo: Pre-Cálculo y Persistencia de Linaje en BigQuery
 - **ADR-015:** Aislamiento Canónico de Tareas Airflow por DAG y Blindaje Estricto Anti-Colisión de Linaje
 - **ADR-016:** Recolector Multi-Fuente de Linaje BigQuery (Vistas, Rutinas y Tablas Externas con SQLGlot)
+- **ADR-017:** Principio de Menor Privilegio IAM, Service Account Dedicada y Parametrización Total de Datasets y Recursos GCP
 
 ---
 
@@ -211,5 +212,30 @@ Este documento constituye la **memoria viva del proyecto**. Registra todas las d
   3. **Disposición Contigua en el Grafo (`layoutProximityDashboard`):** En `LineageGraphView.tsx`, las vistas dependientes se posicionan adyacentes a su tabla fuente en la cuadrícula ortogonal, asegurando aristas ultra-cortas y visualmente armónicas.
   4. **Emulación y Tests:** Se integró la vista `vista_ejemplotabla_uno` en el catálogo de fallback y en la suite de 10 pruebas automatizadas (`test_multidataset_costs_errors.py`).
 - **Impacto:** Detección 100% precisa y matemática de vistas y tablas externas en BigQuery, operando de forma resiliente tanto en entornos con permisos acotados de dataset como con credenciales completas de GCP.
+
+---
+
+### ADR-017: Principio de Menor Privilegio IAM, Service Account Dedicada y Parametrización Total de Datasets y Recursos GCP
+
+- **Contexto:** Al trasladar la plataforma a nuevos proyectos corporativos de Google Cloud Platform, el uso de roles de superadministrador (`roles/owner`, `roles/editor`, `roles/bigquery.admin`, `roles/storage.admin`) viola las normas de seguridad de Liverpool y las buenas prácticas de gobernanza de GCP. Además, el dataset maestro de BigQuery (`BQ_DATASET`) y la Service Account estaban parcialmente fijos o carecían de una interfaz interactiva de configuración y validación en el frontend.
+- **Decisión:**
+  1. **Principio Innegociable de Menor Privilegio (Least Privilege IAM):**
+     - Se prohíbe taxativamente la recomendación y uso de `roles/bigquery.admin`, `roles/storage.admin`, `roles/owner` y `roles/editor`.
+     - La Service Account dedicada (`sa-applineaje-backend`) opera con el conjunto mínimo necesario de roles delimitados por recurso:
+       - **Proyecto:** `roles/bigquery.jobUser` (crear y consultar jobs), `roles/aiplatform.user` (inferencia con Gemini Flash/Pro) y `roles/logging.logWriter`.
+       - **Dataset de la Aplicación (`BQ_DATASET`):** `roles/bigquery.dataEditor` concedido **únicamente sobre dicho dataset**.
+       - **Datasets Monitoreados:** `roles/bigquery.metadataViewer` para introspección de esquemas y vistas sin acceso a los datos.
+       - **Buckets de Almacenamiento:** `roles/storage.objectAdmin` concedido exclusivamente sobre `gs://$INBOX_BUCKET` y `gs://$PROCESSED_BUCKET`.
+  2. **Parametrización Completa del Dataset (`BQ_DATASET`):**
+     - Se añadió el endpoint `POST /api/gcp/validate-dataset` para verificar existencia, formato y número de tablas en tiempo real.
+     - En `init_db.py`, se implementó tolerancia a cuentas de servicio con permisos acotados a nivel de dataset (captura de excepción `Forbidden` al crear o consultar el dataset).
+     - Se agregó una tarjeta de edición y validación interactiva de `BQ_DATASET` en `ConfigView.tsx`.
+  3. **Service Account Dedicada y Configurable (`GCP_SERVICE_ACCOUNT`):**
+     - Se incorporó `service_account` al modelo `StorageConfig` y a las variables de entorno de Cloud Run.
+     - En `deploy/deploy_gcp.sh`, se añadió el aprovisionamiento automatizado de la SA con menor privilegio y el flag `--service-account="$SA_EMAIL"` en el despliegue de Cloud Run.
+  4. **Guía Interactiva IAM en Frontend:**
+     - Se integró un panel interactivo colapsable en `ConfigView.tsx` con todos los comandos `gcloud` listos para copiar y ejecutar, adaptados dinámicamente a los valores configurados de proyecto, dataset, buckets y cuenta de servicio.
+- **Impacto:** Cumplimiento total de auditoría y seguridad corporativa, portabilidad inmediata a cualquier proyecto GCP sin fricción de permisos y control visual completo sobre los recursos de infraestructura.
+
 
 

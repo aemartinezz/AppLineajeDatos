@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     GCS_INBOX_BUCKET: str = os.getenv("GCS_INBOX_BUCKET", "datosdeentrada")
     GCS_PROCESSED_BUCKET: str = os.getenv("GCS_PROCESSED_BUCKET", "datosprocesadosapp")
     GCS_QUARANTINE_BUCKET: str = os.getenv("GCS_QUARANTINE_BUCKET", "datosquarentena")
+    GCP_SERVICE_ACCOUNT: str = os.getenv("GCP_SERVICE_ACCOUNT", "sa-applineaje-backend@crp-poc-it-hackathon-13.iam.gserviceaccount.com")
     
     # Modo Local / Simulado si no hay credenciales GCP activas
     USE_MOCK_GCP: bool = os.getenv("USE_MOCK_GCP", "true").lower() in ("true", "1", "yes")
@@ -38,6 +39,7 @@ current_app_config = AppConfig(
         processed_bucket=f"gs://{settings.GCS_PROCESSED_BUCKET}",
         quarantine_bucket=f"gs://{settings.GCS_QUARANTINE_BUCKET}",
         gcp_project_id=settings.GCP_PROJECT_ID,
-        bq_dataset=settings.BQ_DATASET
+        bq_dataset=settings.BQ_DATASET,
+        service_account=settings.GCP_SERVICE_ACCOUNT
     )
 )

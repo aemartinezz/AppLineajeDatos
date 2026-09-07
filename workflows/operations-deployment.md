@@ -11,15 +11,89 @@ Este documento describe los **procedimientos operativos para la compilación, de
 |----------|:-----------------:|-------------|
 | `GCP_PROJECT_ID` | `crp-poc-it-hackathon-13` | Identificador del proyecto de GCP. |
 | `GCP_REGION` | `us-central1` | Región para servicios Cloud Run y Cloud Build. |
-| `BQ_DATASET` | `applineajedatos` | Dataset maestro de BigQuery. |
-| `GCS_INBOX_BUCKET` | `crp-poc-it-hackathon-13_inbox` | Bucket de entrada para ingesta automática de archivos. |
-| `GCS_PROCESSED_BUCKET` | `crp-poc-it-hackathon-13_processed` | Bucket histórico para archivos ya analizados. |
+| `BQ_DATASET` | `applineajedatos` | Dataset maestro de BigQuery (configurable). |
+| `GCS_INBOX_BUCKET` | `datosdeentrada` | Bucket de entrada para ingesta automática de archivos. |
+| `GCS_PROCESSED_BUCKET` | `datosprocesadosapp` | Bucket histórico para archivos ya analizados. |
+| `GCS_QUARANTINE_BUCKET` | `datosquarentena` | Bucket para anomalías o archivos no procesables. |
+| `GCP_SERVICE_ACCOUNT` | `sa-applineaje-backend@...` | Service Account dedicada con roles de menor privilegio. |
 | `USE_MOCK_GCP` | `false` (en prod) / `true` (en local) | Si es `true`, simula BigQuery y GCS localmente. |
 | `PORT` | `8080` | Puerto HTTP para Uvicorn en Cloud Run. |
 
 ---
 
-## 2. Proceso de Despliegue Paso a Paso
+---
+
+## 2. Procedimiento de Instalación en Nuevos Proyectos GCP (Menor Privilegio)
+
+Para instalar la plataforma en un proyecto nuevo de Google Cloud Platform sin utilizar permisos de superadministrador (`roles/owner`, `roles/editor` o `roles/bigquery.admin`), siga este procedimiento:
+
+### Paso 1: Habilitar APIs Requeridas
+```bash
+gcloud services enable \
+  run.googleapis.com \
+  cloudbuild.googleapis.com \
+  artifactregistry.googleapis.com \
+  bigquery.googleapis.com \
+  storage.googleapis.com \
+  aiplatform.googleapis.com \
+  logging.googleapis.com \
+  --project="[PROJECT_ID]"
+```
+
+### Paso 2: Crear Service Account Dedicada para Backend
+```bash
+gcloud iam service-accounts create sa-applineaje-backend \
+  --display-name="SA Backend Linaje End-to-End" \
+  --project="[PROJECT_ID]"
+```
+
+### Paso 3: Asignar Roles Estrictos de Menor Privilegio (Least Privilege)
+```bash
+SA_EMAIL="sa-applineaje-backend@[PROJECT_ID].iam.gserviceaccount.com"
+
+# 1. Nivel Proyecto: Ejecutar consultas SQL y llamadas a Gemini Vertex AI
+gcloud projects add-iam-policy-binding "[PROJECT_ID]" \
+  --member="serviceAccount:$SA_EMAIL" \
+  --role="roles/bigquery.jobUser"
+
+gcloud projects add-iam-policy-binding "[PROJECT_ID]" \
+  --member="serviceAccount:$SA_EMAIL" \
+  --role="roles/aiplatform.user"
+
+gcloud projects add-iam-policy-binding "[PROJECT_ID]" \
+  --member="serviceAccount:$SA_EMAIL" \
+  --role="roles/logging.logWriter"
+
+# 2. Nivel Dataset de la Aplicación (sin ser BigQuery Admin)
+bq add-iam-policy-binding \
+  --member="serviceAccount:$SA_EMAIL" \
+  --role="roles/bigquery.dataEditor" \
+  "[PROJECT_ID]:[BQ_DATASET]"
+
+# 3. Nivel Buckets de Cloud Storage (sin ser Storage Admin)
+gcloud storage buckets add-iam-policy-binding "gs://[INBOX_BUCKET]" \
+  --member="serviceAccount:$SA_EMAIL" \
+  --role="roles/storage.objectAdmin"
+
+gcloud storage buckets add-iam-policy-binding "gs://[PROCESSED_BUCKET]" \
+  --member="serviceAccount:$SA_EMAIL" \
+  --role="roles/storage.objectAdmin"
+```
+
+### Paso 4: Despliegue Automatizado con Script
+```bash
+./deploy/deploy_gcp.sh \
+  "[PROJECT_ID]" \
+  "[REGION]" \
+  "[BQ_DATASET]" \
+  "[INBOX_BUCKET]" \
+  "[PROCESSED_BUCKET]" \
+  "sa-applineaje-backend"
+```
+
+---
+
+## 3. Proceso Manual de Compilación y Despliegue Paso a Paso
 
 ### A. Despliegue del Frontend React (`applineaje-frontend`)
 1. **Compilación y Empaquetado con Google Cloud Build:**

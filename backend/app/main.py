@@ -11,7 +11,8 @@ from app.models.schemas import (
     LineageGraph, PipelineResult, AppConfig, ExecutionStatus, LoginRequest, UserUpsertRequest,
     UserStatusUpdateRequest, ModelCostSummary, AppError, ErrorResolveRequest, ErrorReportRequest,
     GcpProjectValidationRequest, GcpProjectValidationResponse,
-    GcpBucketValidationRequest, GcpBucketValidationResponse
+    GcpBucketValidationRequest, GcpBucketValidationResponse,
+    GcpDatasetValidationRequest, GcpDatasetValidationResponse
 )
 from app.services.bigquery_service import bigquery_service
 from app.services.storage_service import storage_service
@@ -440,8 +441,65 @@ def validate_gcp_environment():
         "project_id": project_id,
         "is_all_ready": True,
         "components": components,
-        "recommendations": "Todos los servicios esenciales de GCP están configurados. Para producción completa, asigne el rol 'BigQuery Admin' y 'Storage Admin' a la Service Account de Cloud Run."
+        "recommendations": "Servicios esenciales de GCP configurados. Principio de Menor Privilegio (Least Privilege): Asigne a la Service Account dedicada (ej. sa-applineaje-backend) los roles 'roles/bigquery.jobUser' y 'roles/aiplatform.user' a nivel proyecto, 'roles/bigquery.dataEditor' únicamente sobre el dataset de la aplicación y 'roles/storage.objectAdmin' en los buckets designados."
     }
+
+@app.post("/api/gcp/validate-dataset", response_model=GcpDatasetValidationResponse)
+def validate_gcp_dataset(req: GcpDatasetValidationRequest):
+    """
+    Valida la existencia y accesibilidad de un Dataset en Google BigQuery bajo el Principio de Menor Privilegio.
+    """
+    import re
+    dataset_name = req.dataset_name.strip()
+    proj = req.project_id.strip() if req.project_id else settings.GCP_PROJECT_ID
+
+    if not dataset_name:
+        return GcpDatasetValidationResponse(
+            dataset_name="",
+            project_id=proj,
+            is_valid=False,
+            message="El nombre del Dataset de BigQuery no puede estar vacío."
+        )
+
+    # Validación sintáctica BigQuery: caracteres alfanuméricos y guiones bajos (hasta 1024 caracteres)
+    if not re.match(r"^[a-zA-Z0-9_]{1,1024}$", dataset_name):
+        return GcpDatasetValidationResponse(
+            dataset_name=dataset_name,
+            project_id=proj,
+            is_valid=False,
+            message="Formato inválido: el nombre del Dataset debe contener solo letras, números y guiones bajos."
+        )
+
+    if settings.USE_MOCK_GCP or bigquery_service.bq_client is None:
+        # En modo local/mock
+        return GcpDatasetValidationResponse(
+            dataset_name=dataset_name,
+            project_id=proj,
+            is_valid=True,
+            message=f"Dataset '{proj}.{dataset_name}' validado exitosamente (Modo Emulado).",
+            tables_count=7
+        )
+
+    try:
+        ds_ref = f"{proj}.{dataset_name}"
+        ds = bigquery_service.bq_client.get_dataset(ds_ref)
+        tables = list(bigquery_service.bq_client.list_tables(ds.reference))
+        return GcpDatasetValidationResponse(
+            dataset_name=dataset_name,
+            project_id=proj,
+            is_valid=True,
+            message=f"Dataset accesible y activo en BigQuery ({len(tables)} tablas encontradas).",
+            tables_count=len(tables)
+        )
+    except Exception as e:
+        err_msg = str(e)
+        logger.warning(f"Error validando dataset BigQuery '{dataset_name}': {err_msg}")
+        return GcpDatasetValidationResponse(
+            dataset_name=dataset_name,
+            project_id=proj,
+            is_valid=False,
+            message=f"No se pudo acceder al Dataset '{dataset_name}': {err_msg}"
+        )
 
 @app.post("/api/gcp/validate-project", response_model=GcpProjectValidationResponse)
 def validate_single_gcp_project(req: GcpProjectValidationRequest):

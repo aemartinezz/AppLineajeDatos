@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { 
   ArrowLeft, Save, Check, DollarSign, AlertTriangle, RefreshCw, TrendingUp, 
-  Cpu, Plus, Trash2, CheckCircle2, XCircle, Loader2, ShieldCheck, Database, Layers
+  Cpu, Plus, Trash2, CheckCircle2, XCircle, Loader2, ShieldCheck, Database, Layers,
+  KeyRound, ChevronDown, ChevronUp, Copy, BookOpen, Terminal
 } from 'lucide-react';
 
 interface ModelCostsData {
@@ -43,6 +44,7 @@ export const ConfigView: React.FC<ConfigViewProps> = ({ onBack, userRole = 'Deve
       gcp_project_id: 'crp-poc-it-hackathon-13',
       bq_dataset: 'applineajedatos',
       monitored_projects: ['crp-poc-it-hackathon-13'],
+      service_account: 'sa-applineaje-backend@crp-poc-it-hackathon-13.iam.gserviceaccount.com',
     },
     default_confidence_threshold: 0.80,
   });
@@ -64,6 +66,45 @@ export const ConfigView: React.FC<ConfigViewProps> = ({ onBack, userRole = 'Deve
   // Estados para Validación de Buckets GCS
   const [validatingBucket, setValidatingBucket] = useState<string | null>(null);
   const [bucketValidationResults, setBucketValidationResults] = useState<{ [key: string]: { isValid: boolean; message: string; objectsCount?: number } }>({});
+
+  // Estados para Validación de Dataset BigQuery y Guía IAM
+  const [validatingDataset, setValidatingDataset] = useState<boolean>(false);
+  const [datasetValidationResult, setDatasetValidationResult] = useState<{ isValid: boolean; message: string; tablesCount?: number } | null>(null);
+  const [showIamGuide, setShowIamGuide] = useState<boolean>(false);
+  const [copiedCmd, setCopiedCmd] = useState<string | null>(null);
+
+  const handleValidateDataset = async (datasetName: string) => {
+    try {
+      setValidatingDataset(true);
+      const res = await fetch('/api/gcp/validate-dataset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          dataset_name: datasetName,
+          project_id: config.storage_config?.gcp_project_id
+        })
+      });
+      const data = await res.json();
+      setDatasetValidationResult({
+        isValid: data.is_valid,
+        message: data.message,
+        tablesCount: data.tables_count
+      });
+    } catch (err: any) {
+      setDatasetValidationResult({
+        isValid: false,
+        message: err.message || 'Error al conectar con Google BigQuery'
+      });
+    } finally {
+      setValidatingDataset(false);
+    }
+  };
+
+  const copyToClipboard = (text: string, id: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedCmd(id);
+    setTimeout(() => setCopiedCmd(null), 2500);
+  };
 
   const handleValidateBucket = async (bucketKey: string, bucketUri: string) => {
     try {
@@ -603,6 +644,67 @@ export const ConfigView: React.FC<ConfigViewProps> = ({ onBack, userRole = 'Deve
           </div>
         </div>
 
+        {/* Card: BQ_DATASET (Dataset de la Aplicación) */}
+        <div className="card" style={{ padding: '20px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+            <span style={{ fontSize: '12px', fontWeight: 700, color: '#111827' }}>BQ_DATASET (Dataset Maestro)</span>
+            <span className="badge" style={{ backgroundColor: '#FAF0F5', color: '#731853', fontSize: '10px' }}>Editable</span>
+          </div>
+          <div style={{ fontSize: '12px', color: '#6B7280', marginBottom: '12px' }}>
+            Dataset de BigQuery donde se almacenan las 7 tablas maestras de linaje, usuarios y configuraciones.
+          </div>
+          <input
+            type="text"
+            value={config.storage_config?.bq_dataset || 'applineajedatos'}
+            onChange={(e) => setConfig({ ...config, storage_config: { ...config.storage_config, bq_dataset: e.target.value } })}
+            style={{ width: '100%', padding: '9px 12px', borderRadius: '6px', border: '1px solid #D1D5DB', fontSize: '14px', marginBottom: '10px' }}
+          />
+          {datasetValidationResult && (
+            <div style={{ marginBottom: '12px', fontSize: '11px', padding: '6px 10px', borderRadius: '6px', backgroundColor: datasetValidationResult.isValid ? '#F0FDF4' : '#FEF2F2', color: datasetValidationResult.isValid ? '#16A34A' : '#DC2626', border: `1px solid ${datasetValidationResult.isValid ? '#BBF7D0' : '#FECACA'}` }}>
+              {datasetValidationResult.isValid ? `✓ ${datasetValidationResult.message}` : `✕ ${datasetValidationResult.message}`}
+            </div>
+          )}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+            <button
+              className="btn-outline"
+              onClick={() => handleValidateDataset(config.storage_config?.bq_dataset || 'applineajedatos')}
+              disabled={validatingDataset}
+              style={{ fontSize: '12px' }}
+            >
+              {validatingDataset ? <Loader2 size={12} className="animate-spin" /> : <Database size={12} />}
+              Validar Dataset
+            </button>
+            <button className="btn-outline" onClick={() => handleSave('bq_dataset')}>
+              {savedField === 'bq_dataset' ? <><Check size={14} /> Guardado</> : 'Guardar'}
+            </button>
+          </div>
+        </div>
+
+        {/* Card: GCP_SERVICE_ACCOUNT */}
+        <div className="card" style={{ padding: '20px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+            <span style={{ fontSize: '12px', fontWeight: 700, color: '#111827' }}>GCP_SERVICE_ACCOUNT (Cuenta de Servicio)</span>
+            <span className="badge" style={{ backgroundColor: '#F0FDF4', color: '#16A34A', fontSize: '10px', border: '1px solid #BBF7D0' }}>
+              Least Privilege
+            </span>
+          </div>
+          <div style={{ fontSize: '12px', color: '#6B7280', marginBottom: '12px' }}>
+            Service Account dedicada para Cloud Run Backend. Requiere permisos mínimos (sin roles Owner/Editor/BigQuery Admin).
+          </div>
+          <input
+            type="text"
+            value={config.storage_config?.service_account || ''}
+            onChange={(e) => setConfig({ ...config, storage_config: { ...config.storage_config, service_account: e.target.value } })}
+            placeholder="sa-applineaje-backend@tu-proyecto.iam.gserviceaccount.com"
+            style={{ width: '100%', padding: '9px 12px', borderRadius: '6px', border: '1px solid #D1D5DB', fontSize: '13px', marginBottom: '14px', fontFamily: 'monospace' }}
+          />
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <button className="btn-outline" onClick={() => handleSave('service_account')}>
+              {savedField === 'service_account' ? <><Check size={14} /> Guardado</> : 'Guardar'}
+            </button>
+          </div>
+        </div>
+
         {/* Card: BUCKET_ENTRADA_GCS */}
         <div className="card" style={{ padding: '20px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
@@ -800,6 +902,163 @@ export const ConfigView: React.FC<ConfigViewProps> = ({ onBack, userRole = 'Deve
               <Plus size={14} /> Agregar y Validar Proyecto
             </button>
           </div>
+        </div>
+
+        {/* Panel Interactivo: Guía de Instalación IAM y Principio de Menor Privilegio */}
+        <div className="card" style={{ padding: '24px', gridColumn: 'span 2', backgroundColor: '#FAFAFA', border: '1px solid #E2E8F0' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }} onClick={() => setShowIamGuide(!showIamGuide)}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <KeyRound size={20} color="#731853" />
+              <div>
+                <span style={{ fontSize: '14px', fontWeight: 800, color: '#1E293B', display: 'block' }}>
+                  Guía de Despliegue e Instalación IAM (Principio de Menor Privilegio)
+                </span>
+                <span style={{ fontSize: '12px', color: '#64748B' }}>
+                  Comandos gcloud listos para ejecutar para configurar un nuevo proyecto GCP sin roles de superadministrador.
+                </span>
+              </div>
+            </div>
+            <button
+              type="button"
+              className="btn-outline"
+              style={{ fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 12px' }}
+            >
+              {showIamGuide ? <><ChevronUp size={14} /> Ocultar Guía</> : <><ChevronDown size={14} /> Ver Comandos IAM</>}
+            </button>
+          </div>
+
+          {showIamGuide && (
+            <div style={{ marginTop: '20px', borderTop: '1px solid #E2E8F0', paddingTop: '18px' }}>
+              <div style={{ marginBottom: '16px', backgroundColor: '#F0FDF4', border: '1px solid #BBF7D0', padding: '12px 16px', borderRadius: '8px', fontSize: '12px', color: '#166534' }}>
+                <strong>Seguridad Corporativa:</strong> No utilice roles amplios como <code>roles/owner</code>, <code>roles/editor</code> ni <code>roles/bigquery.admin</code>. La Service Account únicamente requiere permisos de edición acotados al dataset de la app y lectura de objetos en los buckets específicos.
+              </div>
+
+              {/* Paso 1: Habilitar APIs */}
+              <div style={{ marginBottom: '18px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                  <span style={{ fontSize: '12px', fontWeight: 700, color: '#334155' }}>
+                    Paso 1: Habilitar APIs Requeridas en el Proyecto
+                  </span>
+                  <button
+                    onClick={() => copyToClipboard(`gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com bigquery.googleapis.com storage.googleapis.com aiplatform.googleapis.com logging.googleapis.com --project="${config.storage_config?.gcp_project_id || 'crp-poc-it-hackathon-13'}"`, 'apis')}
+                    className="btn-outline"
+                    style={{ fontSize: '11px', padding: '3px 8px', display: 'flex', alignItems: 'center', gap: '4px' }}
+                  >
+                    <Copy size={11} /> {copiedCmd === 'apis' ? '¡Copiado!' : 'Copiar'}
+                  </button>
+                </div>
+                <pre style={{ backgroundColor: '#0F172A', color: '#F8FAFC', padding: '12px', borderRadius: '6px', fontSize: '12px', overflowX: 'auto', margin: 0, fontFamily: 'monospace' }}>
+{`gcloud services enable \\
+  run.googleapis.com \\
+  cloudbuild.googleapis.com \\
+  artifactregistry.googleapis.com \\
+  bigquery.googleapis.com \\
+  storage.googleapis.com \\
+  aiplatform.googleapis.com \\
+  logging.googleapis.com \\
+  --project="${config.storage_config?.gcp_project_id || 'crp-poc-it-hackathon-13'}"`}
+                </pre>
+              </div>
+
+              {/* Paso 2: Crear Service Account */}
+              <div style={{ marginBottom: '18px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                  <span style={{ fontSize: '12px', fontWeight: 700, color: '#334155' }}>
+                    Paso 2: Crear Service Account Dedicada
+                  </span>
+                  <button
+                    onClick={() => copyToClipboard(`gcloud iam service-accounts create sa-applineaje-backend --display-name="SA Backend Linaje End-to-End" --project="${config.storage_config?.gcp_project_id || 'crp-poc-it-hackathon-13'}"`, 'sa_create')}
+                    className="btn-outline"
+                    style={{ fontSize: '11px', padding: '3px 8px', display: 'flex', alignItems: 'center', gap: '4px' }}
+                  >
+                    <Copy size={11} /> {copiedCmd === 'sa_create' ? '¡Copiado!' : 'Copiar'}
+                  </button>
+                </div>
+                <pre style={{ backgroundColor: '#0F172A', color: '#F8FAFC', padding: '12px', borderRadius: '6px', fontSize: '12px', overflowX: 'auto', margin: 0, fontFamily: 'monospace' }}>
+{`gcloud iam service-accounts create sa-applineaje-backend \\
+  --display-name="SA Backend Linaje End-to-End" \\
+  --project="${config.storage_config?.gcp_project_id || 'crp-poc-it-hackathon-13'}"`}
+                </pre>
+              </div>
+
+              {/* Paso 3: Roles Proyecto y Dataset */}
+              <div style={{ marginBottom: '18px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                  <span style={{ fontSize: '12px', fontWeight: 700, color: '#334155' }}>
+                    Paso 3: Asignar Roles de Mínimo Privilegio (Proyecto, Dataset y Buckets)
+                  </span>
+                  <button
+                    onClick={() => copyToClipboard(`SA_EMAIL="${config.storage_config?.service_account || `sa-applineaje-backend@${config.storage_config?.gcp_project_id || 'crp-poc-it-hackathon-13'}.iam.gserviceaccount.com`}"
+PROJECT_ID="${config.storage_config?.gcp_project_id || 'crp-poc-it-hackathon-13'}"
+BQ_DATASET="${config.storage_config?.bq_dataset || 'applineajedatos'}"
+INBOX_BUCKET="${(config.storage_config?.inbox_bucket || 'datosdeentrada').replace('gs://', '')}"
+PROCESSED_BUCKET="${(config.storage_config?.processed_bucket || 'datosprocesadosapp').replace('gs://', '')}"
+
+# Roles a nivel Proyecto
+gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$SA_EMAIL" --role="roles/bigquery.jobUser"
+gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$SA_EMAIL" --role="roles/aiplatform.user"
+gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$SA_EMAIL" --role="roles/logging.logWriter"
+
+# Rol a nivel Dataset de la App (sin ser BigQuery Admin)
+bq add-iam-policy-binding --member="serviceAccount:$SA_EMAIL" --role="roles/bigquery.dataEditor" "$PROJECT_ID:$BQ_DATASET"
+
+# Roles a nivel Buckets (sin ser Storage Admin)
+gcloud storage buckets add-iam-policy-binding "gs://$INBOX_BUCKET" --member="serviceAccount:$SA_EMAIL" --role="roles/storage.objectAdmin"
+gcloud storage buckets add-iam-policy-binding "gs://$PROCESSED_BUCKET" --member="serviceAccount:$SA_EMAIL" --role="roles/storage.objectAdmin"`, 'roles')}
+                    className="btn-outline"
+                    style={{ fontSize: '11px', padding: '3px 8px', display: 'flex', alignItems: 'center', gap: '4px' }}
+                  >
+                    <Copy size={11} /> {copiedCmd === 'roles' ? '¡Copiado!' : 'Copiar'}
+                  </button>
+                </div>
+                <pre style={{ backgroundColor: '#0F172A', color: '#F8FAFC', padding: '12px', borderRadius: '6px', fontSize: '12px', overflowX: 'auto', margin: 0, fontFamily: 'monospace' }}>
+{`SA_EMAIL="${config.storage_config?.service_account || `sa-applineaje-backend@${config.storage_config?.gcp_project_id || 'crp-poc-it-hackathon-13'}.iam.gserviceaccount.com`}"
+PROJECT_ID="${config.storage_config?.gcp_project_id || 'crp-poc-it-hackathon-13'}"
+BQ_DATASET="${config.storage_config?.bq_dataset || 'applineajedatos'}"
+INBOX_BUCKET="${(config.storage_config?.inbox_bucket || 'datosdeentrada').replace('gs://', '')}"
+PROCESSED_BUCKET="${(config.storage_config?.processed_bucket || 'datosprocesadosapp').replace('gs://', '')}"
+
+# 1. Ejecutar consultas y llamadas a IA a nivel Proyecto
+gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$SA_EMAIL" --role="roles/bigquery.jobUser"
+gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$SA_EMAIL" --role="roles/aiplatform.user"
+gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$SA_EMAIL" --role="roles/logging.logWriter"
+
+# 2. Permisos de datos únicamente sobre el Dataset de la Aplicación
+bq add-iam-policy-binding --member="serviceAccount:$SA_EMAIL" --role="roles/bigquery.dataEditor" "$PROJECT_ID:$BQ_DATASET"
+
+# 3. Permisos de archivos únicamente sobre los Buckets de la Aplicación
+gcloud storage buckets add-iam-policy-binding "gs://$INBOX_BUCKET" --member="serviceAccount:$SA_EMAIL" --role="roles/storage.objectAdmin"
+gcloud storage buckets add-iam-policy-binding "gs://$PROCESSED_BUCKET" --member="serviceAccount:$SA_EMAIL" --role="roles/storage.objectAdmin"`}
+                </pre>
+              </div>
+
+              {/* Paso 4: Despliegue Cloud Run */}
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                  <span style={{ fontSize: '12px', fontWeight: 700, color: '#334155' }}>
+                    Paso 4: Comando de Despliegue Automatizado
+                  </span>
+                  <button
+                    onClick={() => copyToClipboard(`./deploy/deploy_gcp.sh ${config.storage_config?.gcp_project_id || 'crp-poc-it-hackathon-13'} us-central1 ${config.storage_config?.bq_dataset || 'applineajedatos'} ${(config.storage_config?.inbox_bucket || 'datosdeentrada').replace('gs://', '')} ${(config.storage_config?.processed_bucket || 'datosprocesadosapp').replace('gs://', '')} sa-applineaje-backend`, 'deploy')}
+                    className="btn-outline"
+                    style={{ fontSize: '11px', padding: '3px 8px', display: 'flex', alignItems: 'center', gap: '4px' }}
+                  >
+                    <Copy size={11} /> {copiedCmd === 'deploy' ? '¡Copiado!' : 'Copiar'}
+                  </button>
+                </div>
+                <pre style={{ backgroundColor: '#0F172A', color: '#F8FAFC', padding: '12px', borderRadius: '6px', fontSize: '12px', overflowX: 'auto', margin: 0, fontFamily: 'monospace' }}>
+{`./deploy/deploy_gcp.sh \\
+  "${config.storage_config?.gcp_project_id || 'crp-poc-it-hackathon-13'}" \\
+  "us-central1" \\
+  "${config.storage_config?.bq_dataset || 'applineajedatos'}" \\
+  "${(config.storage_config?.inbox_bucket || 'datosdeentrada').replace('gs://', '')}" \\
+  "${(config.storage_config?.processed_bucket || 'datosprocesadosapp').replace('gs://', '')}" \\
+  "sa-applineaje-backend"`}
+                </pre>
+              </div>
+
+            </div>
+          )}
         </div>
 
       </div>

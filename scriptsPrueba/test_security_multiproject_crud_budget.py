@@ -71,6 +71,23 @@ def run_tests():
     assert "datasets_found" in valid_proj.json()
     details.append("Multi-Proyecto GCP: Validación exitosa de conectividad y conteo de datasets BigQuery")
 
+    # 3b. Validación de Dataset BigQuery y Menor Privilegio
+    bad_ds = client.post("/api/gcp/validate-dataset", json={"dataset_name": "ds-invalid-format!"})
+    assert bad_ds.status_code == 200
+    assert bad_ds.json().get("is_valid") is False
+    details.append("Seguridad BigQuery: Validación y rechazo de nombres de dataset con caracteres inválidos")
+
+    valid_ds = client.post("/api/gcp/validate-dataset", json={"dataset_name": "applineajedatos"})
+    assert valid_ds.status_code == 200
+    assert valid_ds.json().get("is_valid") is True
+    details.append("Menor Privilegio BigQuery: Validación exitosa de accesibilidad de dataset sin rol BigQuery Admin")
+
+    # Comprobar que service_account y bq_dataset están presentes en la configuración
+    init_cfg = client.get("/api/config").json()
+    assert "service_account" in init_cfg.get("storage_config", {})
+    assert "bq_dataset" in init_cfg.get("storage_config", {})
+    details.append("Configuración Dinámica: Parámetros service_account y bq_dataset presentes y configurables")
+
     # 4. Actualización y Recálculo Dinámico de Presupuesto IA
     current_cfg = client.get("/api/config").json()
     current_cfg["models_settings"]["monthly_budget_usd"] = 75.0

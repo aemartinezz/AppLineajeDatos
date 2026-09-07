@@ -51,16 +51,31 @@ Este documento establece las **normas obligatorias de seguridad**, autenticació
 
 ---
 
-## 4. Gestión de Credenciales y Secretos
+## 4. Gestión de Credenciales, Service Accounts y Menor Privilegio (Least Privilege IAM)
 
 1. **Prohibición de Secretos en Código Fuente:**
    - Jamás se deben escribir llaves de API, Service Account Keys en formato JSON, contraseñas o tokens en el código fuente ni subirlos a GitHub.
-   - Todo acceso a GCP debe gestionarse mediante:
-     - **Application Default Credentials (ADC)** o la cuenta de servicio adjunta al servicio de Cloud Run (`Service Account` con roles de mínimo privilegio).
-     - Roles recomendados:
-       - `roles/bigquery.dataEditor` y `roles/bigquery.jobUser` sobre el dataset específico.
-       - `roles/storage.objectAdmin` sobre los buckets específicos de Inbox y Processed.
-       - `roles/aiplatform.user` para llamadas a Vertex AI / Gemini.
+   - Todo acceso a GCP debe gestionarse mediante **Application Default Credentials (ADC)** o la Service Account dedicada adjunta al contenedor de Cloud Run (`--service-account`).
+
+2. **Principio Innegociable de Menor Privilegio (Least Privilege):**
+   - **Queda estrictamente prohibido** el uso de roles de superadministrador o de amplio espectro en la infraestructura:
+     - ❌ `roles/owner` o `roles/editor`
+     - ❌ `roles/bigquery.admin`
+     - ❌ `roles/storage.admin`
+   - La plataforma debe operar únicamente con los roles indispensables y delimitados por recurso:
+     - **A nivel de Proyecto GCP:**
+       - `roles/bigquery.jobUser`: Permite ejecutar consultas SQL (`bigquery.jobs.create`, `bigquery.jobs.get`).
+       - `roles/aiplatform.user`: Permite invocar modelos Gemini 1.5 Flash / Pro en Vertex AI.
+       - `roles/logging.logWriter`: Permite enviar telemetría e incidencias a Cloud Logging.
+     - **A nivel de Dataset de la Aplicación (`BQ_DATASET`):**
+       - `roles/bigquery.dataEditor`: Permite crear y actualizar las 7 tablas maestras de la aplicación sin permisos administrativos sobre el resto de BigQuery.
+     - **A nivel de Datasets Externos Monitoreados:**
+       - `roles/bigquery.metadataViewer`: Solo lectura de esquemas, `INFORMATION_SCHEMA.VIEWS` y rutinas sin acceso a datos confidenciales.
+     - **A nivel de Buckets de Almacenamiento:**
+       - `roles/storage.objectAdmin`: Concedido exclusivamente sobre `gs://$INBOX_BUCKET` y `gs://$PROCESSED_BUCKET`.
+
+3. **Parametrización Dinámica de la Service Account:**
+   - La Service Account debe ser configurable mediante la variable `GCP_SERVICE_ACCOUNT` y reflejarse en la interfaz de configuración del frontend para auditoría.
 
 ---
 

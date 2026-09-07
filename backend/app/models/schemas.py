@@ -94,6 +94,7 @@ class StorageConfig(BaseModel):
     gcp_project_id: str = "crp-poc-it-hackathon-13"
     bq_dataset: str = "lineage_metadata"
     monitored_projects: List[str] = Field(default_factory=lambda: ["crp-poc-it-hackathon-13"])
+    service_account: Optional[str] = "sa-applineaje-backend@crp-poc-it-hackathon-13.iam.gserviceaccount.com"
 
 class AppConfig(BaseModel):
     app_name: str = "Plataforma de Linaje End-to-End"
@@ -192,6 +193,18 @@ class GcpBucketValidationResponse(BaseModel):
     is_valid: bool
     message: str
     objects_count: int = 0
+
+class GcpDatasetValidationRequest(BaseModel):
+    dataset_name: str
+    project_id: Optional[str] = None
+
+class GcpDatasetValidationResponse(BaseModel):
+    dataset_name: str
+    project_id: str
+    is_valid: bool
+    message: str
+    tables_count: int = 0
+
 
 
 
