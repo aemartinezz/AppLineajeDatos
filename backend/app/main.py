@@ -7,12 +7,22 @@ from app.config import settings, current_app_config
 from app.models.schemas import LineageGraph, PipelineResult, AppConfig, ExecutionStatus
 from app.services.bigquery_service import bigquery_service
 from app.services.storage_service import storage_service
+from app.services.init_db import init_bigquery_tables
+from app.engine.code_architecture import CodeArchitectureInspector
 
 app = FastAPI(
     title="Plataforma de Linaje End-to-End & Observabilidad",
     description="API de Backend para correlación de linaje multi-herramienta en GCP con telemetría en tiempo real",
     version="1.0.0"
 )
+
+@app.on_event("startup")
+def on_startup():
+    try:
+        init_bigquery_tables()
+    except Exception as e:
+        print(f"Inicio BigQuery: {e}")
+
 
 # Habilitar CORS para el Frontend de React
 app.add_middleware(
@@ -181,6 +191,18 @@ def validate_gcp_environment():
         "components": components,
         "recommendations": "Todos los servicios esenciales de GCP están configurados. Para producción completa, asigne el rol 'BigQuery Admin' y 'Storage Admin' a la Service Account de Cloud Run."
     }
+
+# -------------------------------------------------------------
+# DOCUMENTACIÓN VIVA DE CÓDIGO Y ARQUITECTURA
+# -------------------------------------------------------------
+
+@app.get("/api/architecture/graph")
+def get_architecture_graph():
+    """
+    Retorna el grafo de arquitectura viva e introspección de código de la plataforma.
+    Exclusivo para roles Developer y Admin.
+    """
+    return CodeArchitectureInspector.get_live_architecture_graph(app)
 
 if __name__ == "__main__":
     import uvicorn

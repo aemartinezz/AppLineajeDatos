@@ -14,6 +14,7 @@ import test_cascade_pipeline
 import test_lineage_linker
 import test_storage_lifecycle
 import test_api_endpoints
+import test_architecture_and_bq_persistence
 
 def execute_all():
     print("=" * 70)
@@ -30,7 +31,8 @@ def execute_all():
         ("Pipeline en Cascada de 4 Niveles", test_cascade_pipeline),
         ("Motor de Fusión y Linaje End-to-End", test_lineage_linker),
         ("Ciclo de Vida de Almacenamiento (Inbox/Processed)", test_storage_lifecycle),
-        ("Endpoints REST y Telemetría de la API", test_api_endpoints)
+        ("Endpoints REST y Telemetría de la API", test_api_endpoints),
+        ("Introspección de Arquitectura y Persistencia BigQuery", test_architecture_and_bq_persistence)
     ]:
         print(f"\n--- Ejecutando: {name} ---")
         try:
@@ -38,6 +40,9 @@ def execute_all():
             suites_results.append(res)
             if not res.get("passed", True):
                 all_passed = False
+                print(f"  [FALLO] {res.get('error', 'Fallo desconocido')}")
+            else:
+                print(f"  [APROBADO] {res.get('details', ['OK'])}")
         except Exception as e:
             print(f"  [ERROR] Excepción en suite {name}: {e}")
             suites_results.append({"suite": name, "passed": False, "error": str(e)})

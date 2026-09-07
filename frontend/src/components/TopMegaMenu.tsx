@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { 
   Menu, Shield, FlaskConical, Home, GitFork, 
-  Activity, FolderUp, Settings, FileSearch, CheckCircle2
+  Activity, FolderUp, Settings, FileSearch, CheckCircle2,
+  Code, ChevronDown
 } from 'lucide-react';
 
 interface TopMegaMenuProps {
@@ -9,6 +10,8 @@ interface TopMegaMenuProps {
   onTabChange: (tabId: string) => void;
   isMenuOpen: boolean;
   setIsMenuOpen: (open: boolean) => void;
+  userRole: string;
+  onRoleChange: (role: string) => void;
 }
 
 export const TopMegaMenu: React.FC<TopMegaMenuProps> = ({
@@ -16,13 +19,20 @@ export const TopMegaMenu: React.FC<TopMegaMenuProps> = ({
   onTabChange,
   isMenuOpen,
   setIsMenuOpen,
+  userRole,
+  onRoleChange,
 }) => {
+  const [roleDropdownOpen, setRoleDropdownOpen] = useState(false);
+
+  const roles = ['Admin', 'Developer', 'Data Engineer', 'Auditor'];
+
   const menuItems = [
     { id: 'inicio', title: 'Inicio', subtitle: 'Resumen y métricas', icon: Home },
     { id: 'grafo', title: 'Grafo Linaje', subtitle: 'Explorador interactivo E2E', icon: GitFork },
     { id: 'estatus', title: 'Estatus en Vivo', subtitle: 'Monitoreo de telemetría', icon: Activity },
     { id: 'bandeja', title: 'Bandeja Archivos', subtitle: 'Carga e inferencia (Inbox)', icon: FolderUp },
     { id: 'configuracion', title: 'Configuración', subtitle: 'Modelos IA y parámetros', icon: Settings },
+    { id: 'arquitectura', title: 'Arquitectura Viva', subtitle: 'Grafo de código (Dev/Admin)', icon: Code, badge: 'DEV / ADMIN' },
     { id: 'auditoria', title: 'Auditoría', subtitle: 'Historial de procesamiento', icon: FileSearch },
     { id: 'gcp', title: 'Validación GCP', subtitle: 'Verificar crp-poc-it-13', icon: CheckCircle2 },
   ];
@@ -63,18 +73,64 @@ export const TopMegaMenu: React.FC<TopMegaMenuProps> = ({
           </div>
         </div>
 
-        {/* Derecha: Probar como + Role Badge + Email */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-          <button
-            className="btn-outline"
-            style={{ padding: '5px 12px', fontSize: '12px', borderRadius: '9999px', height: '30px' }}
-          >
-            <FlaskConical size={14} />
-            Probar como
-          </button>
+        {/* Derecha: Selector de Rol + Badge + Email */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '14px', position: 'relative' }}>
+          {/* Botón de cambio de rol */}
+          <div style={{ position: 'relative' }}>
+            <button
+              className="btn-outline"
+              onClick={() => setRoleDropdownOpen(!roleDropdownOpen)}
+              style={{ padding: '5px 12px', fontSize: '12px', borderRadius: '9999px', height: '32px', display: 'flex', alignItems: 'center', gap: '6px' }}
+            >
+              <FlaskConical size={14} />
+              Rol: <b>{userRole}</b>
+              <ChevronDown size={14} />
+            </button>
+
+            {roleDropdownOpen && (
+              <div style={{
+                position: 'absolute',
+                top: '38px',
+                right: 0,
+                backgroundColor: '#ffffff',
+                boxShadow: '0 8px 20px rgba(0,0,0,0.12)',
+                borderRadius: '8px',
+                border: '1px solid #E5E7EB',
+                padding: '6px 0',
+                zIndex: 110,
+                minWidth: '150px'
+              }}>
+                {roles.map(r => (
+                  <div
+                    key={r}
+                    onClick={() => {
+                      onRoleChange(r);
+                      setRoleDropdownOpen(false);
+                    }}
+                    style={{
+                      padding: '8px 14px',
+                      fontSize: '12px',
+                      cursor: 'pointer',
+                      fontWeight: userRole === r ? 700 : 500,
+                      color: userRole === r ? '#731853' : '#374151',
+                      backgroundColor: userRole === r ? '#FAF0F5' : 'transparent',
+                    }}
+                    onMouseEnter={(e) => {
+                      if (userRole !== r) e.currentTarget.style.backgroundColor = '#F9FAFB';
+                    }}
+                    onMouseLeave={(e) => {
+                      if (userRole !== r) e.currentTarget.style.backgroundColor = 'transparent';
+                    }}
+                  >
+                    {r}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
 
           <span className="badge badge-brand" style={{ padding: '4px 12px', fontSize: '11px' }}>
-            ADMIN_ROOT
+            {userRole === 'Admin' ? 'ADMIN_ROOT' : userRole.toUpperCase()}
           </span>
 
           <span style={{ fontSize: '13px', color: '#4B5563', fontWeight: 500 }}>
@@ -83,7 +139,7 @@ export const TopMegaMenu: React.FC<TopMegaMenuProps> = ({
         </div>
       </div>
 
-      {/* Mega-Menú Desplegable Horizontal (Estilo Imagen 5) */}
+      {/* Mega-Menú Desplegable Horizontal (Estilo Corporativo) */}
       {isMenuOpen && (
         <div
           style={{
@@ -123,6 +179,7 @@ export const TopMegaMenu: React.FC<TopMegaMenuProps> = ({
                     backgroundColor: isActive ? '#FAF0F5' : '#ffffff',
                     cursor: 'pointer',
                     transition: 'all 0.15s ease-in-out',
+                    position: 'relative'
                   }}
                   onMouseEnter={(e) => {
                     if (!isActive) e.currentTarget.style.backgroundColor = '#F9FAFB';
@@ -145,9 +202,17 @@ export const TopMegaMenu: React.FC<TopMegaMenuProps> = ({
                         fontSize: '14px',
                         fontWeight: isActive ? 700 : 600,
                         color: isActive ? '#731853' : '#1F2937',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px'
                       }}
                     >
                       {item.title}
+                      {item.badge && (
+                        <span style={{ fontSize: '9px', padding: '1px 5px', borderRadius: '4px', backgroundColor: '#731853', color: '#fff' }}>
+                          {item.badge}
+                        </span>
+                      )}
                     </div>
                     <div style={{ fontSize: '12px', color: '#6B7280', marginTop: '2px' }}>
                       {item.subtitle}

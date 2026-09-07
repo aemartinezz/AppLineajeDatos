@@ -2,7 +2,10 @@ import React, { useEffect, useRef, useState } from 'react';
 import cytoscape from 'cytoscape';
 // @ts-ignore
 import dagre from 'cytoscape-dagre';
-import { Sliders, RefreshCw, ZoomIn, ZoomOut, Maximize2, ShieldAlert } from 'lucide-react';
+import { 
+  Sliders, RefreshCw, ZoomIn, ZoomOut, Maximize2, 
+  Search, ArrowLeft, ArrowRight, RotateCcw, Info, X
+} from 'lucide-react';
 
 if (typeof cytoscape('core', 'dagre') === 'undefined') {
   cytoscape.use(dagre);
@@ -35,10 +38,18 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
   const containerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<cytoscape.Core | null>(null);
 
-  const [minConfidence, setMinConfidence] = useState<number>(0.80);
+  const [minConfidence, setMinConfidence] = useState<number>(0.50);
   const [totalNodes, setTotalNodes] = useState<number>(0);
   const [totalEdges, setTotalEdges] = useState<number>(0);
+  const [allNodes, setAllNodes] = useState<NodeData[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
+
+  // Buscador y aislamiento upstream/downstream
+  const [selectedSearchNodeId, setSelectedSearchNodeId] = useState<string>('');
+  const [lineageMode, setLineageMode] = useState<'NONE' | 'UPSTREAM' | 'DOWNSTREAM' | 'FULL'>('NONE');
+
+  // Tooltips interactivos
+  const [activeTooltip, setActiveTooltip] = useState<string | null>(null);
 
   // Cargar datos desde la API
   const fetchGraph = async (confidence: number) => {
@@ -48,6 +59,7 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
       const data = await res.json();
       setTotalNodes(data.total_nodes);
       setTotalEdges(data.total_edges);
+      setAllNodes(data.nodes);
       renderCytoscape(data.nodes, data.edges);
     } catch (err) {
       console.error("Error al cargar grafo de linaje:", err);
@@ -96,6 +108,9 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
     const cy = cytoscape({
       container: containerRef.current,
       elements: elements,
+      wheelSensitivity: 0.12, // Zoom suave, sin saltos bruscos
+      minZoom: 0.25,          // Límite mínimo para no perder el grafo
+      maxZoom: 2.2,           // Límite máximo para no pixelar
       style: [
         {
           selector: 'node',
@@ -111,9 +126,10 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
             'text-valign': 'center',
             'text-halign': 'center',
             'text-wrap': 'wrap',
-            'text-max-width': '120px',
-            'width': '140px',
+            'text-max-width': '125px',
+            'width': '145px',
             'height': '65px',
+            'box-shadow': '0 2px 5px rgba(0,0,0,0.06)',
           } as any,
         },
         {
@@ -148,7 +164,7 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
         // @ts-ignore
         rankDir: 'LR', // De izquierda a derecha
         nodeSep: 50,
-        rankSep: 80,
+        rankSep: 85,
       },
     });
 
@@ -174,7 +190,6 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
       try {
         const msg = JSON.parse(event.data);
         if (msg.type === 'STATUS_UPDATE') {
-          // Actualizar dinámicamente el color del nodo en el canvas
           const cy = cyRef.current;
           if (cy) {
             const node = cy.getElementById(msg.node_id);
@@ -202,9 +217,77 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
     };
   }, []);
 
+  // Función para centrar y reajustar el grafo
+  const handleCenterGraph = () => {
+    if (cyRef.current) {
+      cyRef.current.fit(undefined, 50);
+      cyRef.current.center();
+    }
+  };
+
+  // Función para filtrar linaje upstream / downstream a partir de un nodo
+  const applyLineageFilter = (nodeId: string, mode: 'UPSTREAM' | 'DOWNSTREAM' | 'FULL') => {
+    const cy = cyRef.current;
+    if (!cy || !nodeId) return;
+
+    const targetNode = cy.getElementById(nodeId);
+    if (targetNode.length === 0) return;
+
+    setLineageMode(mode);
+
+    // Marcar todos como atenuados
+    cy.elements().addClass('faded');
+
+    let collection = cy.collection().add(targetNode);
+
+    if (mode === 'UPSTREAM') {
+      // Hacia atrás: predecesores
+      const preds = targetNode.predecessors();
+      collection = collection.add(preds);
+    } else if (mode === 'DOWNSTREAM') {
+      // Hacia adelante: sucesores
+      const succs = targetNode.successors();
+      collection = collection.add(succs);
+    } else if (mode === 'FULL') {
+      // Ambos sentidos
+      const preds = targetNode.predecessors();
+      const succs = targetNode.successors();
+      collection = collection.add(preds).add(succs);
+    }
+
+    collection.removeClass('faded');
+    cy.center(targetNode);
+    cy.zoom(1.1);
+  };
+
+  const clearLineageFilter = () => {
+    const cy = cyRef.current;
+    if (cy) {
+      cy.elements().removeClass('faded');
+      cy.fit(undefined, 40);
+    }
+    setLineageMode('NONE');
+    setSelectedSearchNodeId('');
+  };
+
   return (
     <div style={{ position: 'relative', width: '100%', height: 'calc(100vh - 140px)', backgroundColor: '#F8F9FA' }}>
-      {/* Barra de Herramientas y Filtro de Certeza */}
+      <style>{`
+        .faded { opacity: 0.15 !important; }
+        .info-btn { 
+          background: none; 
+          border: none; 
+          cursor: pointer; 
+          color: #9CA3AF; 
+          display: flex; 
+          align-items: center; 
+          padding: 2px;
+          border-radius: 50%;
+        }
+        .info-btn:hover { color: #731853; }
+      `}</style>
+
+      {/* Barra de Herramientas Superior */}
       <div
         style={{
           position: 'absolute',
@@ -218,18 +301,20 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
           border: '1px solid #E5E7EB',
           display: 'flex',
           alignItems: 'center',
-          gap: '20px',
+          gap: '16px',
+          flexWrap: 'wrap'
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        {/* 1. Filtro de Certeza */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', position: 'relative' }}>
           <Sliders size={18} color="#731853" />
           <span style={{ fontSize: '13px', fontWeight: 600, color: '#374151' }}>
             Filtro de Certeza:
           </span>
           <input
             type="range"
-            min="0"
-            max="1"
+            min="0.50"
+            max="1.0"
             step="0.05"
             value={minConfidence}
             onChange={(e) => {
@@ -237,22 +322,162 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
               setMinConfidence(val);
               fetchGraph(val);
             }}
-            style={{ accentColor: '#731853', width: '120px', cursor: 'pointer' }}
+            style={{ accentColor: '#731853', width: '110px', cursor: 'pointer' }}
           />
           <span className="badge badge-brand" style={{ fontSize: '11px' }}>
             ≥ {Math.round(minConfidence * 100)}%
           </span>
+
+          <button 
+            className="info-btn" 
+            onClick={() => setActiveTooltip(activeTooltip === 'CONFIDENCE' ? null : 'CONFIDENCE')}
+            title="¿Qué es el Filtro de Certeza?"
+          >
+            <Info size={15} />
+          </button>
+
+          {activeTooltip === 'CONFIDENCE' && (
+            <div style={{
+              position: 'absolute',
+              top: '32px',
+              left: 0,
+              width: '260px',
+              backgroundColor: '#1E293B',
+              color: '#F8FAFC',
+              fontSize: '11px',
+              padding: '10px 12px',
+              borderRadius: '6px',
+              boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
+              zIndex: 30,
+              lineHeight: '1.4'
+            }}>
+              <b>Filtro de Certeza:</b> Oculta dependencias inferidas por IA con score inferior al umbral. Las líneas continuas son deterministas (100%), las discontinuas fueron inferidas por Gemini Flash o Pro.
+            </div>
+          )}
         </div>
 
         <div style={{ height: '20px', width: '1px', backgroundColor: '#E5E7EB' }} />
 
-        {/* Resumen de elementos */}
+        {/* 2. Buscador y Trazabilidad Upstream / Downstream */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', position: 'relative' }}>
+          <Search size={16} color="#6B7280" />
+          <input
+            type="text"
+            list="nodes-datalist"
+            placeholder="Buscar componente..."
+            value={selectedSearchNodeId}
+            onChange={(e) => {
+              setSelectedSearchNodeId(e.target.value);
+              if (e.target.value) {
+                applyLineageFilter(e.target.value, 'FULL');
+              } else {
+                clearLineageFilter();
+              }
+            }}
+            style={{
+              padding: '5px 10px',
+              fontSize: '12px',
+              borderRadius: '6px',
+              border: '1px solid #D1D5DB',
+              width: '180px'
+            }}
+          />
+          <datalist id="nodes-datalist">
+            {allNodes.map(n => (
+              <option key={n.id} value={n.id}>{n.name} ({n.tool_type})</option>
+            ))}
+          </datalist>
+
+          {selectedSearchNodeId && (
+            <div style={{ display: 'flex', gap: '4px' }}>
+              <button
+                onClick={() => applyLineageFilter(selectedSearchNodeId, 'UPSTREAM')}
+                className="btn-secondary"
+                style={{
+                  padding: '4px 8px',
+                  fontSize: '11px',
+                  backgroundColor: lineageMode === 'UPSTREAM' ? '#FAF0F5' : '#FFF',
+                  borderColor: lineageMode === 'UPSTREAM' ? '#731853' : '#D1D5DB',
+                  color: lineageMode === 'UPSTREAM' ? '#731853' : '#374151'
+                }}
+                title="Ver linaje hacia atrás (origen / ingesta)"
+              >
+                <ArrowLeft size={13} /> Origen
+              </button>
+
+              <button
+                onClick={() => applyLineageFilter(selectedSearchNodeId, 'DOWNSTREAM')}
+                className="btn-secondary"
+                style={{
+                  padding: '4px 8px',
+                  fontSize: '11px',
+                  backgroundColor: lineageMode === 'DOWNSTREAM' ? '#FAF0F5' : '#FFF',
+                  borderColor: lineageMode === 'DOWNSTREAM' ? '#731853' : '#D1D5DB',
+                  color: lineageMode === 'DOWNSTREAM' ? '#731853' : '#374151'
+                }}
+                title="Ver linaje hacia adelante (consumo / destino)"
+              >
+                Destino <ArrowRight size={13} />
+              </button>
+
+              <button
+                onClick={clearLineageFilter}
+                className="btn-secondary"
+                style={{ padding: '4px 6px', fontSize: '11px' }}
+                title="Limpiar filtro de nodo"
+              >
+                <X size={13} />
+              </button>
+            </div>
+          )}
+
+          <button 
+            className="info-btn" 
+            onClick={() => setActiveTooltip(activeTooltip === 'SEARCH' ? null : 'SEARCH')}
+            title="¿Cómo funciona el buscador de impacto?"
+          >
+            <Info size={15} />
+          </button>
+
+          {activeTooltip === 'SEARCH' && (
+            <div style={{
+              position: 'absolute',
+              top: '32px',
+              left: 0,
+              width: '260px',
+              backgroundColor: '#1E293B',
+              color: '#F8FAFC',
+              fontSize: '11px',
+              padding: '10px 12px',
+              borderRadius: '6px',
+              boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
+              zIndex: 30,
+              lineHeight: '1.4'
+            }}>
+              <b>Análisis de Impacto:</b> Seleccione un componente para aislar su flujo. <b>Origen (Upstream)</b> muestra qué jobs o scripts lo alimentan; <b>Destino (Downstream)</b> muestra qué tablas o reportes consumen sus datos.
+            </div>
+          )}
+        </div>
+
+        <div style={{ height: '20px', width: '1px', backgroundColor: '#E5E7EB' }} />
+
+        {/* 3. Resumen y Controles de Vista */}
         <div style={{ fontSize: '12px', color: '#6B7280' }}>
           <b>{totalNodes}</b> componentes | <b>{totalEdges}</b> dependencias
         </div>
 
-        {/* Controles de Vista */}
-        <div style={{ display: 'flex', gap: '6px' }}>
+        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+          {/* Botón Centrar Grafo */}
+          <button
+            className="btn-secondary"
+            onClick={handleCenterGraph}
+            title="Centrar Grafo en pantalla"
+            style={{ padding: '6px 10px', display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', fontWeight: 600 }}
+          >
+            <Maximize2 size={15} />
+            Centrar
+          </button>
+
           <button
             className="btn-secondary"
             onClick={() => cyRef.current?.zoom(cyRef.current.zoom() * 1.2)}
@@ -261,6 +486,7 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
           >
             <ZoomIn size={16} />
           </button>
+
           <button
             className="btn-secondary"
             onClick={() => cyRef.current?.zoom(cyRef.current.zoom() * 0.8)}
@@ -269,18 +495,11 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
           >
             <ZoomOut size={16} />
           </button>
-          <button
-            className="btn-secondary"
-            onClick={() => cyRef.current?.fit()}
-            title="Ajustar pantalla"
-            style={{ padding: '6px' }}
-          >
-            <Maximize2 size={16} />
-          </button>
+
           <button
             className="btn-secondary"
             onClick={() => fetchGraph(minConfidence)}
-            title="Refrescar"
+            title="Refrescar datos"
             style={{ padding: '6px' }}
           >
             <RefreshCw size={16} />
@@ -301,6 +520,7 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
           boxShadow: '0 2px 6px rgba(0,0,0,0.06)',
           border: '1px solid #E5E7EB',
           display: 'flex',
+          alignItems: 'center',
           gap: '14px',
           fontSize: '12px',
           fontWeight: 600,
@@ -322,6 +542,33 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
           <span style={{ width: 10, height: 10, borderRadius: '50%', backgroundColor: '#9CA3AF' }} />
           <span>Pendiente</span>
         </div>
+
+        <button 
+          className="info-btn" 
+          onClick={() => setActiveTooltip(activeTooltip === 'STATUS' ? null : 'STATUS')}
+          title="Telemetría en tiempo real"
+        >
+          <Info size={14} />
+        </button>
+
+        {activeTooltip === 'STATUS' && (
+          <div style={{
+            position: 'absolute',
+            bottom: '36px',
+            left: 0,
+            width: '280px',
+            backgroundColor: '#1E293B',
+            color: '#F8FAFC',
+            fontSize: '11px',
+            padding: '10px 12px',
+            borderRadius: '6px',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
+            zIndex: 30,
+            lineHeight: '1.4'
+          }}>
+            <b>Telemetría en Vivo:</b> Los bordes de los nodos cambian de color en tiempo real conforme llegan eventos de ejecución vía WebSocket (/ws/telemetry) procedentes de Cloud Logging y Pub/Sub.
+          </div>
+        )}
       </div>
 
       {/* Canvas Cytoscape */}

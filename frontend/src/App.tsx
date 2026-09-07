@@ -6,7 +6,8 @@ import { FileUploadModal } from './components/FileUploadModal';
 import { ConfigView } from './components/ConfigView';
 import { GcpValidationView } from './components/GcpValidationView';
 import { InboxManagerView } from './components/InboxManagerView';
-import { GitFork, Activity, ShieldCheck, Database, FileText, ArrowRight } from 'lucide-react';
+import { ArchitectureDocsView } from './components/ArchitectureDocsView';
+import { GitFork, Activity, ShieldCheck, Database, FileText, ArrowRight, Code } from 'lucide-react';
 import './styles/theme.css';
 
 export const App: React.FC = () => {
@@ -14,6 +15,7 @@ export const App: React.FC = () => {
   const [isMenuOpen, setIsMenuOpen] = useState<boolean>(false);
   const [selectedNode, setSelectedNode] = useState<any | null>(null);
   const [isUploadOpen, setIsUploadOpen] = useState<boolean>(false);
+  const [userRole, setUserRole] = useState<string>('Developer');
 
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
@@ -23,6 +25,8 @@ export const App: React.FC = () => {
         onTabChange={(tab) => setActiveTab(tab)}
         isMenuOpen={isMenuOpen}
         setIsMenuOpen={setIsMenuOpen}
+        userRole={userRole}
+        onRoleChange={(role) => setUserRole(role)}
       />
 
       {/* Contenido Principal según el Tab Seleccionado */}
@@ -32,6 +36,10 @@ export const App: React.FC = () => {
             <LineageGraphView onSelectNode={(node) => setSelectedNode(node)} />
             <NodeInspectorDrawer node={selectedNode} onClose={() => setSelectedNode(null)} />
           </div>
+        )}
+
+        {activeTab === 'arquitectura' && (
+          <ArchitectureDocsView userRole={userRole} onChangeRole={(role) => setUserRole(role)} />
         )}
 
         {activeTab === 'inicio' && (
@@ -86,6 +94,9 @@ export const App: React.FC = () => {
                 </button>
                 <button className="btn-secondary" onClick={() => setActiveTab('configuracion')}>
                   Configurar Modelos IA
+                </button>
+                <button className="btn-secondary" onClick={() => setActiveTab('arquitectura')}>
+                  <Code size={16} /> Arquitectura Viva (Dev)
                 </button>
               </div>
             </div>
