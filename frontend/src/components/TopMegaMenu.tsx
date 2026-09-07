@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { 
   Menu, Shield, FlaskConical, Home, GitFork, 
   Activity, FolderUp, Settings, FileSearch, CheckCircle2,
-  Code, ChevronDown
+  Code, Users
 } from 'lucide-react';
+import { SimulationModeBanner } from './SimulationModeBanner';
 
 interface TopMegaMenuProps {
   activeTab: string;
@@ -11,7 +12,10 @@ interface TopMegaMenuProps {
   isMenuOpen: boolean;
   setIsMenuOpen: (open: boolean) => void;
   userRole: string;
-  onRoleChange: (role: string) => void;
+  isSimulating: boolean;
+  simulatedRoleName: string;
+  onOpenSimulationModal: () => void;
+  onExitSimulation: () => void;
 }
 
 export const TopMegaMenu: React.FC<TopMegaMenuProps> = ({
@@ -20,18 +24,18 @@ export const TopMegaMenu: React.FC<TopMegaMenuProps> = ({
   isMenuOpen,
   setIsMenuOpen,
   userRole,
-  onRoleChange,
+  isSimulating,
+  simulatedRoleName,
+  onOpenSimulationModal,
+  onExitSimulation,
 }) => {
-  const [roleDropdownOpen, setRoleDropdownOpen] = useState(false);
-
-  const roles = ['Admin', 'Developer', 'Data Engineer', 'Auditor'];
-
   const menuItems = [
     { id: 'inicio', title: 'Inicio', subtitle: 'Resumen y métricas', icon: Home },
     { id: 'grafo', title: 'Grafo Linaje', subtitle: 'Explorador interactivo E2E', icon: GitFork },
-    { id: 'estatus', title: 'Estatus en Vivo', subtitle: 'Monitoreo de telemetría', icon: Activity },
+    { id: 'estatus', title: 'Estatus en Vivo', subtitle: 'Monitoreo tras bambalinas', icon: Activity },
     { id: 'bandeja', title: 'Bandeja Archivos', subtitle: 'Carga e inferencia (Inbox)', icon: FolderUp },
-    { id: 'configuracion', title: 'Configuración', subtitle: 'Modelos IA y parámetros', icon: Settings },
+    { id: 'configuracion', title: 'Configuración', subtitle: 'Modelos IA y parámetros', icon: Settings, badge: 'ADMIN' },
+    { id: 'usuarios', title: 'Usuarios y Roles', subtitle: 'Catálogo RBAC BigQuery', icon: Users, badge: 'ADMIN' },
     { id: 'arquitectura', title: 'Arquitectura Viva', subtitle: 'Grafo de código (Dev/Admin)', icon: Code, badge: 'DEV / ADMIN' },
     { id: 'auditoria', title: 'Auditoría', subtitle: 'Historial de procesamiento', icon: FileSearch },
     { id: 'gcp', title: 'Validación GCP', subtitle: 'Verificar crp-poc-it-13', icon: CheckCircle2 },
@@ -73,73 +77,71 @@ export const TopMegaMenu: React.FC<TopMegaMenuProps> = ({
           </div>
         </div>
 
-        {/* Derecha: Selector de Rol + Badge + Email */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '14px', position: 'relative' }}>
-          {/* Botón de cambio de rol */}
-          <div style={{ position: 'relative' }}>
-            <button
-              className="btn-outline"
-              onClick={() => setRoleDropdownOpen(!roleDropdownOpen)}
-              style={{ padding: '5px 12px', fontSize: '12px', borderRadius: '9999px', height: '32px', display: 'flex', alignItems: 'center', gap: '6px' }}
+        {/* Derecha: Botón 'Probar como' + Badges de Simulación/Rol + Email */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+          {/* Botón Probar como (Abre el modal idéntico a la imagen 1) */}
+          <button
+            className="btn-outline"
+            onClick={onOpenSimulationModal}
+            style={{
+              padding: '5px 14px',
+              fontSize: '12px',
+              fontWeight: 600,
+              borderRadius: '9999px',
+              height: '32px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              borderColor: isSimulating ? '#731853' : '#D1D5DB',
+              color: isSimulating ? '#731853' : '#374151',
+              backgroundColor: isSimulating ? '#FAF0F5' : '#FFFFFF',
+            }}
+            title="Simular permisos y roles de prueba"
+          >
+            <FlaskConical size={14} />
+            Probar como
+          </button>
+
+          {/* Si está simulando, muestra la píldora 'Simulando' */}
+          {isSimulating && (
+            <span
+              style={{
+                fontSize: '11px',
+                fontWeight: 700,
+                color: '#731853',
+                backgroundColor: '#FAF0F5',
+                border: '1px solid #F3D0E2',
+                padding: '4px 10px',
+                borderRadius: '9999px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+              }}
             >
-              <FlaskConical size={14} />
-              Rol: <b>{userRole}</b>
-              <ChevronDown size={14} />
-            </button>
+              <FlaskConical size={12} /> Simulando
+            </span>
+          )}
 
-            {roleDropdownOpen && (
-              <div style={{
-                position: 'absolute',
-                top: '38px',
-                right: 0,
-                backgroundColor: '#ffffff',
-                boxShadow: '0 8px 20px rgba(0,0,0,0.12)',
-                borderRadius: '8px',
-                border: '1px solid #E5E7EB',
-                padding: '6px 0',
-                zIndex: 110,
-                minWidth: '150px'
-              }}>
-                {roles.map(r => (
-                  <div
-                    key={r}
-                    onClick={() => {
-                      onRoleChange(r);
-                      setRoleDropdownOpen(false);
-                    }}
-                    style={{
-                      padding: '8px 14px',
-                      fontSize: '12px',
-                      cursor: 'pointer',
-                      fontWeight: userRole === r ? 700 : 500,
-                      color: userRole === r ? '#731853' : '#374151',
-                      backgroundColor: userRole === r ? '#FAF0F5' : 'transparent',
-                    }}
-                    onMouseEnter={(e) => {
-                      if (userRole !== r) e.currentTarget.style.backgroundColor = '#F9FAFB';
-                    }}
-                    onMouseLeave={(e) => {
-                      if (userRole !== r) e.currentTarget.style.backgroundColor = 'transparent';
-                    }}
-                  >
-                    {r}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
+          {/* Badge del Rol Activo */}
           <span className="badge badge-brand" style={{ padding: '4px 12px', fontSize: '11px' }}>
-            {userRole === 'Admin' ? 'ADMIN_ROOT' : userRole.toUpperCase()}
+            {isSimulating ? userRole.toUpperCase() : 'ADMIN_ROOT'}
           </span>
 
+          {/* Email Corporativo */}
           <span style={{ fontSize: '13px', color: '#4B5563', fontWeight: 500 }}>
             aemartinezz@liverpool.com.mx
           </span>
         </div>
       </div>
 
-      {/* Mega-Menú Desplegable Horizontal (Estilo Corporativo) */}
+      {/* Banner Transversal de Simulación (Estilo Imagen 2) */}
+      <SimulationModeBanner
+        isSimulating={isSimulating}
+        simulatedRoleName={simulatedRoleName}
+        onExitSimulation={onExitSimulation}
+      />
+
+      {/* Mega-Menú Desplegable Horizontal */}
       {isMenuOpen && (
         <div
           style={{
@@ -179,7 +181,7 @@ export const TopMegaMenu: React.FC<TopMegaMenuProps> = ({
                     backgroundColor: isActive ? '#FAF0F5' : '#ffffff',
                     cursor: 'pointer',
                     transition: 'all 0.15s ease-in-out',
-                    position: 'relative'
+                    position: 'relative',
                   }}
                   onMouseEnter={(e) => {
                     if (!isActive) e.currentTarget.style.backgroundColor = '#F9FAFB';
@@ -204,7 +206,7 @@ export const TopMegaMenu: React.FC<TopMegaMenuProps> = ({
                         color: isActive ? '#731853' : '#1F2937',
                         display: 'flex',
                         alignItems: 'center',
-                        gap: '6px'
+                        gap: '6px',
                       }}
                     >
                       {item.title}

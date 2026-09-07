@@ -100,3 +100,14 @@ class AppConfig(BaseModel):
     default_confidence_threshold: float = 0.80
     realtime_poll_interval_sec: int = 5
     layout_type: str = "dagre-horizontal"
+
+class LoginRequest(BaseModel):
+    email: str
+    name: Optional[str] = None
+
+class UserUpsertRequest(BaseModel):
+    email: str
+    name: str
+    roles: List[str]
+    status: str = "ACTIVE"
+

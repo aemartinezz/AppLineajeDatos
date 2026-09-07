@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import time
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 from google.cloud import bigquery
@@ -31,13 +32,20 @@ class BigQueryService:
         self.edges_store: Dict[str, LineageEdge] = {}
         self.status_store: Dict[str, Dict[str, Any]] = {}
         self.cached_config: AppConfig = current_app_config
+        self._cached_graph: Optional[LineageGraph] = None
+        self._cached_graph_time: float = 0.0
+        self._cache_ttl_seconds: float = 30.0
         self.bq_client: Optional[bigquery.Client] = None
         self._init_client()
         self.init_demo_data()
-        self.load_config_from_bigquery()
+        if self.bq_client:
+            self.load_config_from_bigquery()
 
     def _init_client(self):
         """Inicializa el cliente de BigQuery si las credenciales o entorno están disponibles."""
+        if settings.USE_MOCK_GCP:
+            self.bq_client = None
+            return
         try:
             self.bq_client = bigquery.Client(project=settings.GCP_PROJECT_ID)
             logger.info("Cliente de BigQuery inicializado exitosamente.")
@@ -140,6 +148,7 @@ class BigQueryService:
 
     def save_pipeline_result(self, nodes: List[LineageNode], edges: List[LineageEdge]):
         """Persiste nuevos nodos y aristas descubiertos en memoria y en BigQuery."""
+        self._cached_graph = None  # Invalidar caché para reflejo instantáneo
         for n in nodes:
             self.nodes_store[n.id] = n
         for e in edges:
@@ -193,18 +202,23 @@ class BigQueryService:
             logger.error(f"Excepción persistiendo en BigQuery: {e}")
 
     def get_full_graph(self, min_confidence: float = 0.0) -> LineageGraph:
-        """Fusiona el linaje externo con la metadata nativa de BigQuery y filtra por certeza."""
-        # 1. Obtener linaje nativo de BigQuery
-        bq_data = BigQueryMetadataExtractor.get_native_lineage(settings.GCP_PROJECT_ID, settings.BQ_DATASET)
+        """Fusiona el linaje externo con la metadata nativa de BigQuery con caché ultrarrápida."""
+        now = time.time()
+        if self._cached_graph is None or (now - self._cached_graph_time > self._cache_ttl_seconds):
+            # 1. Obtener linaje nativo de BigQuery
+            bq_data = BigQueryMetadataExtractor.get_native_lineage(settings.GCP_PROJECT_ID, settings.BQ_DATASET)
 
-        # 2. Fusionar con LineageLinker
-        full_graph = LineageLinker.fuse_graph(
-            external_nodes=list(self.nodes_store.values()),
-            external_edges=list(self.edges_store.values()),
-            bq_nodes=bq_data["nodes"],
-            bq_edges=bq_data["edges"],
-            execution_date=datetime.utcnow().strftime("%Y-%m-%d")
-        )
+            # 2. Fusionar con LineageLinker
+            self._cached_graph = LineageLinker.fuse_graph(
+                external_nodes=list(self.nodes_store.values()),
+                external_edges=list(self.edges_store.values()),
+                bq_nodes=bq_data["nodes"],
+                bq_edges=bq_data["edges"],
+                execution_date=datetime.utcnow().strftime("%Y-%m-%d")
+            )
+            self._cached_graph_time = now
+
+        full_graph = self._cached_graph
 
         # 3. Filtrar aristas por umbral de certeza
         filtered_edges = [e for e in full_graph.edges if e.confidence_score >= min_confidence]
@@ -281,5 +295,134 @@ class BigQueryService:
                 logger.error(f"Error al persistir configuración en BigQuery: {e}")
 
         return self.cached_config
+
+    # -------------------------------------------------------------
+    # GESTIÓN DE USUARIOS Y ROLES (RBAC) CON PERSISTENCIA EN BIGQUERY
+    # -------------------------------------------------------------
+
+    def list_users(self) -> List[Dict[str, Any]]:
+        """Lista los usuarios corporativos registrados en app_users_roles."""
+        if not self.bq_client:
+            return [
+                {
+                    "email": "aemartinezz@liverpool.com.mx",
+                    "name": "Argos Eyra Martinez Zeferino",
+                    "roles": ["Admin", "Developer"],
+                    "status": "ACTIVE",
+                    "last_login": datetime.utcnow().isoformat()
+                }
+            ]
+
+        table_ref = f"{settings.GCP_PROJECT_ID}.{settings.BQ_DATASET}.app_users_roles"
+        query = f"SELECT email, name, roles, status, created_at, updated_at, last_login FROM `{table_ref}` ORDER BY created_at DESC"
+        try:
+            query_job = self.bq_client.query(query)
+            users = []
+            for r in query_job.result():
+                users.append({
+                    "email": r.email,
+                    "name": r.name or r.email.split("@")[0],
+                    "roles": list(r.roles) if r.roles else ["Viewer"],
+                    "status": r.status or "ACTIVE",
+                    "created_at": r.created_at.isoformat() if r.created_at else None,
+                    "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+                    "last_login": r.last_login.isoformat() if r.last_login else None
+                })
+            return users
+        except Exception as e:
+            logger.error(f"Error listando usuarios de BigQuery: {e}")
+            return []
+
+    def upsert_user(self, email: str, name: str, roles: List[str], status: str = "ACTIVE") -> Dict[str, Any]:
+        """Crea o actualiza los roles de un usuario corporativo (restringido a @liverpool.com.mx)."""
+        email_clean = email.strip().lower()
+        if not email_clean.endswith("@liverpool.com.mx"):
+            raise ValueError("Dominio no autorizado. Únicamente cuentas con terminación @liverpool.com.mx pueden ser dadas de alta.")
+
+        if not roles:
+            roles = ["Viewer"]
+
+        if self.bq_client:
+            table_ref = f"{settings.GCP_PROJECT_ID}.{settings.BQ_DATASET}.app_users_roles"
+            query = f"""
+            MERGE `{table_ref}` T
+            USING (
+                SELECT @email as email, @name as name, @roles as roles, @status as status
+            ) S
+            ON T.email = S.email
+            WHEN MATCHED THEN
+              UPDATE SET name = S.name, roles = S.roles, status = S.status, updated_at = CURRENT_TIMESTAMP()
+            WHEN NOT MATCHED THEN
+              INSERT (email, name, roles, status, created_at, updated_at, last_login)
+              VALUES (S.email, S.name, S.roles, S.status, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())
+            """
+            job_config = bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("email", "STRING", email_clean),
+                    bigquery.ScalarQueryParameter("name", "STRING", name),
+                    bigquery.ArrayQueryParameter("roles", "STRING", roles),
+                    bigquery.ScalarQueryParameter("status", "STRING", status),
+                ]
+            )
+            self.bq_client.query(query, job_config=job_config).result()
+
+        return {
+            "email": email_clean,
+            "name": name,
+            "roles": roles,
+            "status": status,
+            "updated_at": datetime.utcnow().isoformat()
+        }
+
+    def authenticate_user(self, email: str, name: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Valida el correo corporativo. Si pertenece a @liverpool.com.mx,
+        obtiene sus roles o lo auto-registra como Invitado/Viewer si es la primera vez.
+        """
+        email_clean = email.strip().lower()
+        if not email_clean.endswith("@liverpool.com.mx"):
+            raise PermissionError("Acceso denegado: Únicamente cuentas corporativas @liverpool.com.mx tienen acceso.")
+
+        # Buscar usuario en BigQuery
+        if self.bq_client:
+            table_ref = f"{settings.GCP_PROJECT_ID}.{settings.BQ_DATASET}.app_users_roles"
+            query = f"SELECT email, name, roles, status FROM `{table_ref}` WHERE email = @email LIMIT 1"
+            job_config = bigquery.QueryJobConfig(
+                query_parameters=[bigquery.ScalarQueryParameter("email", "STRING", email_clean)]
+            )
+            rows = list(self.bq_client.query(query, job_config=job_config).result())
+            if rows:
+                u = rows[0]
+                update_q = f"UPDATE `{table_ref}` SET last_login = CURRENT_TIMESTAMP() WHERE email = @email"
+                self.bq_client.query(update_q, job_config=job_config).result()
+                return {
+                    "email": u.email,
+                    "name": u.name or email_clean.split("@")[0],
+                    "roles": list(u.roles) if u.roles else ["Viewer"],
+                    "status": u.status
+                }
+            else:
+                new_user = self.upsert_user(
+                    email=email_clean,
+                    name=name or email_clean.split("@")[0],
+                    roles=["Viewer"],
+                    status="ACTIVE"
+                )
+                return new_user
+
+        # Fallback local
+        if email_clean == "aemartinezz@liverpool.com.mx":
+            return {
+                "email": email_clean,
+                "name": "Argos Eyra Martinez Zeferino",
+                "roles": ["Admin", "Developer"],
+                "status": "ACTIVE"
+            }
+        return {
+            "email": email_clean,
+            "name": name or email_clean.split("@")[0],
+            "roles": ["Viewer"],
+            "status": "ACTIVE"
+        }
 
 bigquery_service = BigQueryService()

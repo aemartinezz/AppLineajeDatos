@@ -64,9 +64,24 @@ OPTIONS(
 );
 """
 
+DDL_APP_USERS_ROLES = """
+CREATE TABLE IF NOT EXISTS `{project}.{dataset}.app_users_roles` (
+    email STRING NOT NULL OPTIONS(description="Correo corporativo del usuario (@liverpool.com.mx)"),
+    name STRING OPTIONS(description="Nombre completo del colaborador"),
+    roles ARRAY<STRING> OPTIONS(description="Roles asignados (Admin, Developer, Data Engineer, Auditor, Viewer)"),
+    status STRING OPTIONS(description="Estado: ACTIVE, INACTIVE"),
+    created_at TIMESTAMP OPTIONS(description="Fecha de alta"),
+    updated_at TIMESTAMP OPTIONS(description="Última modificación"),
+    last_login TIMESTAMP OPTIONS(description="Último acceso a la plataforma")
+)
+OPTIONS(
+    description="Catálogo corporativo de usuarios y roles para control de acceso (RBAC)"
+);
+"""
+
 def init_bigquery_tables(project_id: str = None, dataset_id: str = None) -> dict:
     """
-    Crea las 4 tablas principales en BigQuery si no existen e inicializa la configuración base.
+    Crea las 5 tablas principales en BigQuery si no existen e inicializa configuración y usuarios base.
     """
     proj = project_id or settings.GCP_PROJECT_ID
     ds = dataset_id or settings.BQ_DATASET
@@ -92,6 +107,7 @@ def init_bigquery_tables(project_id: str = None, dataset_id: str = None) -> dict
             "lineage_edges": DDL_LINEAGE_EDGES.format(project=proj, dataset=ds),
             "execution_status_daily": DDL_EXECUTION_STATUS_DAILY.format(project=proj, dataset=ds),
             "app_configurations": DDL_APP_CONFIGURATIONS.format(project=proj, dataset=ds),
+            "app_users_roles": DDL_APP_USERS_ROLES.format(project=proj, dataset=ds),
         }
         
         for table_name, ddl_query in ddls.items():
@@ -118,6 +134,24 @@ def init_bigquery_tables(project_id: str = None, dataset_id: str = None) -> dict
             results["default_config_seeded"] = True
         else:
             results["default_config_seeded"] = False
+
+        # 4. Inicializar usuario principal (aemartinezz@liverpool.com.mx) con roles Admin y Developer
+        admin_email = "aemartinezz@liverpool.com.mx"
+        check_user_query = f"SELECT count(1) as cnt FROM `{proj}.{ds}.app_users_roles` WHERE email = @email"
+        job_config_user = bigquery.QueryJobConfig(
+            query_parameters=[bigquery.ScalarQueryParameter("email", "STRING", admin_email)]
+        )
+        u_iter = client.query(check_user_query, job_config=job_config_user).result()
+        u_row = next(u_iter)
+        if u_row.cnt == 0:
+            insert_user = f"""
+            INSERT INTO `{proj}.{ds}.app_users_roles` (email, name, roles, status, created_at, updated_at, last_login)
+            VALUES (@email, 'Argos Eyra Martinez Zeferino', ['Admin', 'Developer'], 'ACTIVE', CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())
+            """
+            client.query(insert_user, job_config=job_config_user).result()
+            results["admin_user_seeded"] = True
+        else:
+            results["admin_user_seeded"] = False
 
     except Exception as e:
         results["errors"].append(str(e))
