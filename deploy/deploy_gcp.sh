@@ -91,7 +91,7 @@ done
 # 5. Creación física de Tablas DDL en BigQuery
 # -------------------------------------------------------------
 echo ""
-echo "[5/7] Inicializando esquemas DDL en BigQuery (lineage_nodes, lineage_edges, execution_status_daily, app_configurations)..."
+echo "[5/7] Inicializando esquemas DDL en BigQuery (lineage_nodes, lineage_edges, execution_status_daily, app_configurations, app_users_roles, app_model_usage_logs, app_errors_log)..."
 python3 -c "
 import os, sys
 sys.path.append('backend')
