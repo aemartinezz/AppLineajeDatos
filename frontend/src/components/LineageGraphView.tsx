@@ -119,38 +119,41 @@ const layoutProximityDashboard = (
   ];
 
   const connectedNodes = visibleNodes.filter((n) => connectedNodeIds.has(n.id()));
-  const pipelineNodes: cytoscape.NodeSingular[] = [];
-  const placedIds = new Set<string>();
+  const pipelineCandidates: cytoscape.NodeSingular[] = [];
+  const candidateIds = new Set<string>();
 
   // 1. Extraer jobs de pipeline en el orden preferido
   for (const pid of PREFERRED_PIPELINE_ORDER) {
-    const matching = connectedNodes.filter((n) => n.id() === pid && !placedIds.has(n.id()));
+    const matching = connectedNodes.filter((n) => n.id() === pid && !candidateIds.has(n.id()));
     if (matching.length > 0) {
-      pipelineNodes.push(matching[0]);
-      placedIds.add(pid);
+      pipelineCandidates.push(matching[0]);
+      candidateIds.add(pid);
     }
   }
 
   // Si hay más nodos de pipeline/orquestación no listados explícitamente:
   connectedNodes.forEach((n) => {
     const tool = n.data('tool_type');
-    if (['CONTROL_M', 'SHELL', 'DATASTAGE', 'AIRFLOW_COMPOSER'].includes(tool) && !placedIds.has(n.id())) {
-      pipelineNodes.push(n);
-      placedIds.add(n.id());
+    if (['CONTROL_M', 'SHELL', 'DATASTAGE', 'AIRFLOW_COMPOSER'].includes(tool) && !candidateIds.has(n.id())) {
+      pipelineCandidates.push(n);
+      candidateIds.add(n.id());
     }
   });
 
   const gridPositions = new Map<string, { row: number; col: number }>();
   const occupiedCells = new Set<string>();
+  const placedIds = new Set<string>();
 
-  // 2. Asignar Fila 0 a los nodos del pipeline (hasta 'cols' columnas)
-  pipelineNodes.slice(0, cols).forEach((pNode, colIdx) => {
+  // 2. Asignar Fila 0 a los primeros 'cols' nodos del pipeline
+  const firstRowNodes = pipelineCandidates.slice(0, cols);
+  firstRowNodes.forEach((pNode, colIdx) => {
     gridPositions.set(pNode.id(), { row: 0, col: colIdx });
     occupiedCells.add(`0,${colIdx}`);
+    placedIds.add(pNode.id());
   });
 
   // 3. Colocar tablas/archivos destino inmediatamente debajo de su emisor en la misma columna (Fila 1)
-  pipelineNodes.slice(0, cols).forEach((pNode, colIdx) => {
+  firstRowNodes.forEach((pNode, colIdx) => {
     // Buscar targets (ej. DS_LOAD_STAGING -> stg_transacciones_raw)
     const targets = targetsOf.get(pNode.id()) || [];
     for (const targetId of targets) {
@@ -179,7 +182,41 @@ const layoutProximityDashboard = (
     }
   });
 
-  // Si aún quedan nodos conectados sin colocar (ej. pipelines con más de 10 columnas)
+  // Colocar pipelines secundarios adyacentes a su destino si comparten columna
+  const secondaryCandidates = pipelineCandidates.slice(cols);
+  secondaryCandidates.forEach((candNode) => {
+    if (!placedIds.has(candNode.id())) {
+      let targetCol = -1;
+      const targets = targetsOf.get(candNode.id()) || [];
+      for (const t of targets) {
+        if (placedIds.has(t)) {
+          const p = gridPositions.get(t);
+          if (p) { targetCol = p.col; break; }
+        }
+      }
+      if (targetCol === -1) {
+        const sources = sourcesOf.get(candNode.id()) || [];
+        for (const s of sources) {
+          if (placedIds.has(s)) {
+            const p = gridPositions.get(s);
+            if (p) { targetCol = p.col; break; }
+          }
+        }
+      }
+
+      if (targetCol >= 0) {
+        let r = 1;
+        while (occupiedCells.has(`${r},${targetCol}`)) {
+          r++;
+        }
+        gridPositions.set(candNode.id(), { row: r, col: targetCol });
+        occupiedCells.add(`${r},${targetCol}`);
+        placedIds.add(candNode.id());
+      }
+    }
+  });
+
+  // Si aún quedan nodos conectados sin colocar
   connectedNodes.forEach((n) => {
     if (!placedIds.has(n.id())) {
       let r = 1;
