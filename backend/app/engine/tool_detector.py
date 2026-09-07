@@ -32,12 +32,12 @@ class ToolDetector:
         (r"<SMART_FOLDER|<JOB\s+NAME|ctmorder|ctmvar", ToolType.CONTROL_M, "CONTROL_M_XML_OR_CLI"),
         # DataStage
         (r"BEGIN\s+DSJOB|dsjob\s+-run|InfoSphere\s+DataStage|DSR_PROJECT", ToolType.DATASTAGE, "DATASTAGE_SIGNATURE"),
-        # Cloud Composer / Airflow
-        (r"from\s+airflow|import\s+airflow|DAG\(|BigQueryInsertJobOperator|BashOperator", ToolType.AIRFLOW_COMPOSER, "AIRFLOW_SIGNATURE"),
-        # BigQuery SQL / Routine
-        (r"CREATE\s+OR\s+REPLACE\s+(TABLE|VIEW|PROCEDURE|FUNCTION)|MERGE\s+INTO|`[a-zA-Z0-9_\-]+(\.[a-zA-Z0-9_\-]+){2}`", ToolType.BIGQUERY, "BIGQUERY_DDL_DML"),
-        # Shell CLI directos
-        (r"^#!\s*/bin/(bash|sh|ksh)|gcloud\s+composer|bq\s+(query|load|extract)", ToolType.SHELL, "SHELL_SHEBANG_OR_GCLOUD"),
+        # Shell CLI directos y lanzadores de procesos
+        (r"^#!\s*/bin/(bash|sh|ksh)|gcloud\s+composer|bq\s+(query|load|extract)|shell\.lanzador|airflow\s+dags\s+trigger", ToolType.SHELL, "SHELL_SHEBANG_OR_CLI"),
+        # Cloud Composer / Airflow (scripts y logs de ejecución)
+        (r"from\s+airflow|import\s+airflow|DAG\(|BigQueryInsertJobOperator|BashOperator|airflow\.task|dag_id|task_id|AIRFLOW_CTX_", ToolType.AIRFLOW_COMPOSER, "AIRFLOW_SIGNATURE_OR_LOG"),
+        # BigQuery SQL, jobs y eventos de linaje de datos
+        (r"CREATE\s+OR\s+REPLACE\s+(TABLE|VIEW|PROCEDURE|FUNCTION)|MERGE\s+INTO|`[a-zA-Z0-9_\-]+(\.[a-zA-Z0-9_\-]+){2}`|\"system\":\s*\"bigquery\"|destinationTable|destination_table", ToolType.BIGQUERY, "BIGQUERY_DDL_DML_OR_LINEAGE"),
     ]
 
     @classmethod
@@ -61,6 +61,10 @@ class ToolDetector:
 
         # 3. Inspección heurística de logs
         if "ERROR" in content or "INFO" in content or "DEBUG" in content or "WARN" in content:
+            if "airflow" in content.lower():
+                return ToolType.AIRFLOW_COMPOSER, "LOG_SIGNATURE_AIRFLOW", 0.95
+            if "shell" in content.lower() or ".sh" in content:
+                return ToolType.SHELL, "LOG_SIGNATURE_SHELL", 0.95
             if "bqjob_" in content or "bigquery.googleapis.com" in content:
                 return ToolType.BIGQUERY, "LOG_SIGNATURE_BQ", 0.90
             if "dsjob" in content:

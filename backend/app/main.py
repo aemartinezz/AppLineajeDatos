@@ -10,7 +10,8 @@ from app.config import settings, current_app_config
 from app.models.schemas import (
     LineageGraph, PipelineResult, AppConfig, ExecutionStatus, LoginRequest, UserUpsertRequest,
     UserStatusUpdateRequest, ModelCostSummary, AppError, ErrorResolveRequest, ErrorReportRequest,
-    GcpProjectValidationRequest, GcpProjectValidationResponse
+    GcpProjectValidationRequest, GcpProjectValidationResponse,
+    GcpBucketValidationRequest, GcpBucketValidationResponse
 )
 from app.services.bigquery_service import bigquery_service
 from app.services.storage_service import storage_service
@@ -80,7 +81,11 @@ def on_startup():
             init_bigquery_tables()
         except Exception as e:
             print(f"Inicio BigQuery: {e}")
-        asyncio.create_task(gcs_inbox_background_watcher())
+        try:
+            bigquery_service.load_persisted_lineage_from_bigquery()
+        except Exception as e:
+            print(f"Inicio Linaje BigQuery: {e}")
+    asyncio.create_task(gcs_inbox_background_watcher())
 
 
 # Habilitar CORS para el Frontend de React
@@ -181,6 +186,12 @@ def get_file_content(file_name: str):
     """Obtiene el contenido original del archivo archivado para el Inspector lateral."""
     content = storage_service.get_processed_file_content(file_name)
     return {"file_name": file_name, "content": content}
+
+@app.get("/api/lineage/processed")
+def list_processed_files():
+    """Retorna el listado de archivos procesados y archivados en el bucket de Google Cloud Storage."""
+    proc_list = storage_service.list_processed_files()
+    return {"files": proc_list, "processed_files": proc_list}
 
 # -------------------------------------------------------------
 # RUTAS DE TELEMETRÍA EN TIEMPO REAL
@@ -443,6 +454,19 @@ def validate_single_gcp_project(req: GcpProjectValidationRequest):
             is_valid=False,
             message=f"Error al conectar con el proyecto '{project_id}': {str(e)}"
         )
+
+@app.post("/api/gcp/validate-bucket", response_model=GcpBucketValidationResponse)
+def validate_gcp_bucket(req: GcpBucketValidationRequest):
+    """
+    Valida la conectividad y permisos de lectura sobre un bucket en Google Cloud Storage.
+    """
+    res = storage_service.validate_bucket_access(req.bucket_name)
+    return GcpBucketValidationResponse(
+        bucket_name=res.get("bucket", req.bucket_name),
+        is_valid=res.get("is_valid", False),
+        message=res.get("message", ""),
+        objects_count=res.get("objects_count", 0)
+    )
 
 # -------------------------------------------------------------
 # CONTROL DE GASTOS Y AUDITORÍA DE MODELOS IA (ADMIN / DEVELOPER)

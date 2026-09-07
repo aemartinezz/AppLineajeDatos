@@ -165,8 +165,62 @@ class BigQueryService:
 
         return self.cached_config
 
-    def save_pipeline_result(self, nodes: List[LineageNode], edges: List[LineageEdge]):
-        """Persiste nuevos nodos y aristas descubiertos en memoria y en BigQuery."""
+    def load_persisted_lineage_from_bigquery(self):
+        """Rehidrata los nodos y aristas persistidos físicamente en BigQuery hacia la memoria del servicio."""
+        if not self.bq_client:
+            return {"nodes": list(self.nodes_store.values()), "edges": list(self.edges_store.values())}
+
+        try:
+            nodes_table = f"{settings.GCP_PROJECT_ID}.{settings.BQ_DATASET}.lineage_nodes"
+            q_nodes = f"SELECT id, name, tool_type, layer, status, metadata, status_updated_at FROM `{nodes_table}` LIMIT 1000"
+            for row in self.bq_client.query(q_nodes).result():
+                try:
+                    meta = json.loads(row.metadata) if row.metadata else {}
+                except Exception:
+                    meta = {}
+                tool_t = ToolType(row.tool_type) if row.tool_type in [t.value for t in ToolType] else ToolType.GENERIC_TOOL
+                status_e = ExecutionStatus(row.status) if row.status in [s.value for s in ExecutionStatus] else ExecutionStatus.SUCCESS
+                self.nodes_store[row.id] = LineageNode(
+                    id=row.id,
+                    name=row.name,
+                    tool_type=tool_t,
+                    layer=row.layer or "PROCESSING",
+                    status=status_e,
+                    metadata=meta,
+                    status_updated_at=row.status_updated_at
+                )
+
+            edges_table = f"{settings.GCP_PROJECT_ID}.{settings.BQ_DATASET}.lineage_edges"
+            q_edges = f"SELECT id, source_id, target_id, relation_type, confidence_score, inference_method, evidence_snippet FROM `{edges_table}` LIMIT 2000"
+            for row in self.bq_client.query(q_edges).result():
+                rel_t = RelationType(row.relation_type) if row.relation_type in [r.value for r in RelationType] else RelationType.DEPENDS_ON
+                inf_m = InferenceMethod(row.inference_method) if row.inference_method in [m.value for m in InferenceMethod] else InferenceMethod.DETERMINISTIC_PARSER
+                self.edges_store[row.id] = LineageEdge(
+                    id=row.id,
+                    source_id=row.source_id,
+                    target_id=row.target_id,
+                    relation_type=rel_t,
+                    confidence_score=float(row.confidence_score or 1.0),
+                    inference_method=inf_m,
+                    evidence_snippet=row.evidence_snippet or ""
+                )
+            logger.info(f"Linaje rehidratado desde BigQuery: {len(self.nodes_store)} nodos, {len(self.edges_store)} aristas.")
+        except Exception as e:
+            logger.warning(f"Aviso al rehidratar linaje desde BigQuery: {e}")
+
+        return {"nodes": list(self.nodes_store.values()), "edges": list(self.edges_store.values())}
+
+    def save_pipeline_result(self, nodes_or_result: Any, edges: Optional[List[LineageEdge]] = None):
+        """Persiste nuevos nodos y aristas descubiertos en memoria y en BigQuery.
+        Acepta tanto un objeto PipelineResult individual como (nodes, edges) separados.
+        """
+        if hasattr(nodes_or_result, "extracted_nodes"):
+            nodes = nodes_or_result.extracted_nodes
+            edges = nodes_or_result.extracted_edges
+        else:
+            nodes = nodes_or_result
+            edges = edges or []
+
         self._cached_graph = None  # Invalidar caché para reflejo instantáneo
         for n in nodes:
             self.nodes_store[n.id] = n
@@ -224,6 +278,9 @@ class BigQueryService:
         """Fusiona el linaje externo con la metadata nativa de BigQuery sobre todos los proyectos monitoreados."""
         now = time.time()
         if self._cached_graph is None or (now - self._cached_graph_time > self._cache_ttl_seconds):
+            if len(self.nodes_store) <= 6 and self.bq_client:
+                self.load_persisted_lineage_from_bigquery()
+
             # 1. Obtener linaje nativo de BigQuery sobre todos los proyectos configurados
             monitored_projs = self.cached_config.storage_config.monitored_projects or [settings.GCP_PROJECT_ID]
             bq_data = BigQueryMetadataExtractor.get_native_lineage(

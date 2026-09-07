@@ -61,6 +61,40 @@ export const ConfigView: React.FC<ConfigViewProps> = ({ onBack, userRole = 'Deve
   const [validatingProject, setValidatingProject] = useState<string | null>(null);
   const [validationResults, setValidationResults] = useState<{ [key: string]: { isValid: boolean; message: string; datasetsCount?: number; tablesCount?: number } }>({});
 
+  // Estados para Validación de Buckets GCS
+  const [validatingBucket, setValidatingBucket] = useState<string | null>(null);
+  const [bucketValidationResults, setBucketValidationResults] = useState<{ [key: string]: { isValid: boolean; message: string; objectsCount?: number } }>({});
+
+  const handleValidateBucket = async (bucketKey: string, bucketUri: string) => {
+    try {
+      setValidatingBucket(bucketKey);
+      const res = await fetch('/api/gcp/validate-bucket', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bucket_name: bucketUri })
+      });
+      const data = await res.json();
+      setBucketValidationResults(prev => ({
+        ...prev,
+        [bucketKey]: {
+          isValid: data.is_valid,
+          message: data.message,
+          objectsCount: data.objects_count || 0
+        }
+      }));
+    } catch (err: any) {
+      setBucketValidationResults(prev => ({
+        ...prev,
+        [bucketKey]: {
+          isValid: false,
+          message: err.message || 'Error de conexión con Google Cloud Storage'
+        }
+      }));
+    } finally {
+      setValidatingBucket(null);
+    }
+  };
+
   const isCostAuthorized = userRole === 'Admin' || userRole === 'Developer';
   const isAdmin = userRole === 'Admin';
 
@@ -565,6 +599,108 @@ export const ConfigView: React.FC<ConfigViewProps> = ({ onBack, userRole = 'Deve
           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
             <button className="btn-outline" onClick={() => handleSave('gcp_proj')}>
               {savedField === 'gcp_proj' ? <><Check size={14} /> Guardado</> : 'Guardar'}
+            </button>
+          </div>
+        </div>
+
+        {/* Card: BUCKET_ENTRADA_GCS */}
+        <div className="card" style={{ padding: '20px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+            <span style={{ fontSize: '12px', fontWeight: 700, color: '#111827' }}>BUCKET_ENTRADA_GCS (Inbox)</span>
+            <span className="badge" style={{ backgroundColor: '#FAF0F5', color: '#731853', fontSize: '10px' }}>Editable</span>
+          </div>
+          <div style={{ fontSize: '12px', color: '#6B7280', marginBottom: '12px' }}>Bucket de Google Cloud Storage donde se depositan los logs y scripts para procesamiento continuo.</div>
+          <input
+            type="text"
+            value={config.storage_config?.inbox_bucket || 'gs://datosdeentrada'}
+            onChange={(e) => setConfig({ ...config, storage_config: { ...config.storage_config, inbox_bucket: e.target.value } })}
+            style={{ width: '100%', padding: '9px 12px', borderRadius: '6px', border: '1px solid #D1D5DB', fontSize: '14px', marginBottom: '10px' }}
+          />
+          {bucketValidationResults['inbox'] && (
+            <div style={{ marginBottom: '12px', fontSize: '11px', padding: '6px 10px', borderRadius: '6px', backgroundColor: bucketValidationResults['inbox'].isValid ? '#F0FDF4' : '#FEF2F2', color: bucketValidationResults['inbox'].isValid ? '#16A34A' : '#DC2626', border: `1px solid ${bucketValidationResults['inbox'].isValid ? '#BBF7D0' : '#FECACA'}` }}>
+              {bucketValidationResults['inbox'].isValid ? `✓ ${bucketValidationResults['inbox'].message} (${bucketValidationResults['inbox'].objectsCount} objetos)` : `✕ ${bucketValidationResults['inbox'].message}`}
+            </div>
+          )}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+            <button
+              className="btn-outline"
+              onClick={() => handleValidateBucket('inbox', config.storage_config?.inbox_bucket || 'gs://datosdeentrada')}
+              disabled={validatingBucket === 'inbox'}
+              style={{ fontSize: '12px' }}
+            >
+              {validatingBucket === 'inbox' ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
+              Validar Bucket
+            </button>
+            <button className="btn-outline" onClick={() => handleSave('inbox_bucket')}>
+              {savedField === 'inbox_bucket' ? <><Check size={14} /> Guardado</> : 'Guardar'}
+            </button>
+          </div>
+        </div>
+
+        {/* Card: BUCKET_PROCESADOS_GCS */}
+        <div className="card" style={{ padding: '20px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+            <span style={{ fontSize: '12px', fontWeight: 700, color: '#111827' }}>BUCKET_PROCESADOS_GCS (Archivo)</span>
+            <span className="badge" style={{ backgroundColor: '#FAF0F5', color: '#731853', fontSize: '10px' }}>Editable</span>
+          </div>
+          <div style={{ fontSize: '12px', color: '#6B7280', marginBottom: '12px' }}>Bucket donde se archivan los archivos analizados exitosamente con estructura YYYY/MM/DD.</div>
+          <input
+            type="text"
+            value={config.storage_config?.processed_bucket || 'gs://datosprocesadosapp'}
+            onChange={(e) => setConfig({ ...config, storage_config: { ...config.storage_config, processed_bucket: e.target.value } })}
+            style={{ width: '100%', padding: '9px 12px', borderRadius: '6px', border: '1px solid #D1D5DB', fontSize: '14px', marginBottom: '10px' }}
+          />
+          {bucketValidationResults['processed'] && (
+            <div style={{ marginBottom: '12px', fontSize: '11px', padding: '6px 10px', borderRadius: '6px', backgroundColor: bucketValidationResults['processed'].isValid ? '#F0FDF4' : '#FEF2F2', color: bucketValidationResults['processed'].isValid ? '#16A34A' : '#DC2626', border: `1px solid ${bucketValidationResults['processed'].isValid ? '#BBF7D0' : '#FECACA'}` }}>
+              {bucketValidationResults['processed'].isValid ? `✓ ${bucketValidationResults['processed'].message} (${bucketValidationResults['processed'].objectsCount} objetos)` : `✕ ${bucketValidationResults['processed'].message}`}
+            </div>
+          )}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+            <button
+              className="btn-outline"
+              onClick={() => handleValidateBucket('processed', config.storage_config?.processed_bucket || 'gs://datosprocesadosapp')}
+              disabled={validatingBucket === 'processed'}
+              style={{ fontSize: '12px' }}
+            >
+              {validatingBucket === 'processed' ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
+              Validar Bucket
+            </button>
+            <button className="btn-outline" onClick={() => handleSave('processed_bucket')}>
+              {savedField === 'processed_bucket' ? <><Check size={14} /> Guardado</> : 'Guardar'}
+            </button>
+          </div>
+        </div>
+
+        {/* Card: BUCKET_CUARENTENA_GCS */}
+        <div className="card" style={{ padding: '20px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+            <span style={{ fontSize: '12px', fontWeight: 700, color: '#111827' }}>BUCKET_CUARENTENA_GCS (Anomalías)</span>
+            <span className="badge" style={{ backgroundColor: '#FAF0F5', color: '#731853', fontSize: '10px' }}>Editable</span>
+          </div>
+          <div style={{ fontSize: '12px', color: '#6B7280', marginBottom: '12px' }}>Bucket destino para archivos cuyo procesamiento falle de manera irrecuperable.</div>
+          <input
+            type="text"
+            value={config.storage_config?.quarantine_bucket || 'gs://datosquarentena'}
+            onChange={(e) => setConfig({ ...config, storage_config: { ...config.storage_config, quarantine_bucket: e.target.value } })}
+            style={{ width: '100%', padding: '9px 12px', borderRadius: '6px', border: '1px solid #D1D5DB', fontSize: '14px', marginBottom: '10px' }}
+          />
+          {bucketValidationResults['quarantine'] && (
+            <div style={{ marginBottom: '12px', fontSize: '11px', padding: '6px 10px', borderRadius: '6px', backgroundColor: bucketValidationResults['quarantine'].isValid ? '#F0FDF4' : '#FEF2F2', color: bucketValidationResults['quarantine'].isValid ? '#16A34A' : '#DC2626', border: `1px solid ${bucketValidationResults['quarantine'].isValid ? '#BBF7D0' : '#FECACA'}` }}>
+              {bucketValidationResults['quarantine'].isValid ? `✓ ${bucketValidationResults['quarantine'].message} (${bucketValidationResults['quarantine'].objectsCount} objetos)` : `✕ ${bucketValidationResults['quarantine'].message}`}
+            </div>
+          )}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+            <button
+              className="btn-outline"
+              onClick={() => handleValidateBucket('quarantine', config.storage_config?.quarantine_bucket || 'gs://datosquarentena')}
+              disabled={validatingBucket === 'quarantine'}
+              style={{ fontSize: '12px' }}
+            >
+              {validatingBucket === 'quarantine' ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
+              Validar Bucket
+            </button>
+            <button className="btn-outline" onClick={() => handleSave('quarantine_bucket')}>
+              {savedField === 'quarantine_bucket' ? <><Check size={14} /> Guardado</> : 'Guardar'}
             </button>
           </div>
         </div>

@@ -184,5 +184,14 @@ class GcpProjectValidationResponse(BaseModel):
     datasets_found: List[str] = []
     tables_count: int = 0
 
+class GcpBucketValidationRequest(BaseModel):
+    bucket_name: str
+
+class GcpBucketValidationResponse(BaseModel):
+    bucket_name: str
+    is_valid: bool
+    message: str
+    objects_count: int = 0
+
 
 
