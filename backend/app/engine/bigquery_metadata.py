@@ -97,22 +97,7 @@ class BigQueryMetadataExtractor:
             except Exception as proj_err:
                 logger.warning(f"No se pudo acceder a datasets del proyecto {project_id} ({proj_err}). Verifique permisos de Service Account.")
 
-        # 2. Conectar tablas de negocio (ej. pruebasLineaje.ejemplotabla1) con linaje
-        target_example = "BIGQUERY:pruebasLineaje.ejemplotabla1"
-        if target_example in node_ids:
-            edges.append(
-                LineageEdge(
-                    id="DS_LOAD_STAGING->pruebasLineaje.ejemplotabla1",
-                    source_id="DATASTAGE:DS_LOAD_STAGING",
-                    target_id=target_example,
-                    relation_type=RelationType.LOADS_INTO,
-                    confidence_score=1.0,
-                    inference_method=InferenceMethod.BQ_METADATA,
-                    evidence_snippet="BigQuery Native: Ingestión a pruebasLineaje.ejemplotabla1 confirmada en dataset de GCP"
-                )
-            )
-
-        # 3. Intentar extraer linaje de consultas mediante JOBS_BY_USER
+        # 2. Intentar extraer linaje de consultas mediante JOBS_BY_USER
         try:
             query = f"""
             SELECT job_id, statement_type, referenced_tables, destination_table
@@ -191,15 +176,6 @@ class BigQueryMetadataExtractor:
         ]
 
         edges: List[LineageEdge] = [
-            LineageEdge(
-                id="DS_LOAD_STAGING->pruebasLineaje.ejemplotabla1",
-                source_id="DATASTAGE:DS_LOAD_STAGING",
-                target_id="BIGQUERY:pruebasLineaje.ejemplotabla1",
-                relation_type=RelationType.LOADS_INTO,
-                confidence_score=1.0,
-                inference_method=InferenceMethod.BQ_METADATA,
-                evidence_snippet="Dataset pruebasLineaje: Ingestión a ejemplotabla1"
-            ),
             LineageEdge(
                 id="stg_transacciones_raw->sp_procesar_transacciones",
                 source_id="BIGQUERY:stg_transacciones_raw",

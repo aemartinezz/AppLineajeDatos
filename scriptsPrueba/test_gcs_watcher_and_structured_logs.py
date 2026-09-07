@@ -40,6 +40,7 @@ def run_tests():
     assert result_sh.confidence_score == 1.0, f"Se esperaba certeza 1.0 pero se obtuvo {result_sh.confidence_score}"
     assert any("lanzar_carga_ejemplotabla1.sh" in n.id for n in result_sh.extracted_nodes), "Debe existir nodo del script Shell"
     assert any("dag_carga_ejemplotabla1" in n.id for n in result_sh.extracted_nodes), "Debe existir nodo del DAG de Airflow"
+    assert any("dag_carga_ejemplotabla1.cargar_csv_a_bigquery" in n.id for n in result_sh.extracted_nodes), "Debe existir nodo de tarea calificado"
     print("  [OK] shell_airflow.log resuelto en Nivel 1 enlazando Shell -> Airflow -> BigQuery.")
 
     # 3. Probar persistencia e hidratación en BigQuery Service
@@ -64,6 +65,12 @@ def run_tests():
     assert resp_proc.status_code == 200
     assert "processed_files" in resp_proc.json()
     print("  [OK] Endpoint /api/lineage/processed respondió exitosamente.")
+
+    # 6. Probar endpoint de reset de tablas y memoria de linaje
+    resp_reset = client.post("/api/lineage/reset")
+    assert resp_reset.status_code == 200
+    assert resp_reset.json()["success"] is True
+    print("  [OK] Endpoint /api/lineage/reset reseteó la memoria y tablas exitosamente.")
 
     return {
         "suite": "GcsWatcherAndStructuredLogs",

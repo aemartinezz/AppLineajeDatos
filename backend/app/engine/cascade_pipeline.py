@@ -346,7 +346,7 @@ class CascadePipeline:
         task_node_id = None
         if task_id:
             t_display = f"{dag_id}.{task_id}" if dag_id else task_id
-            task_node_id = f"AIRFLOW_COMPOSER:{task_id}"
+            task_node_id = f"AIRFLOW_COMPOSER:{dag_id}.{task_id}" if dag_id else f"AIRFLOW_COMPOSER:{task_id}"
             add_node(LineageNode(id=task_node_id, name=t_display, tool_type=ToolType.AIRFLOW_COMPOSER, layer="PROCESSING"))
 
         # 4. Nodo BigQuery Tabla Destino

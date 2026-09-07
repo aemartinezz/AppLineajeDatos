@@ -193,6 +193,49 @@ def list_processed_files():
     proc_list = storage_service.list_processed_files()
     return {"files": proc_list, "processed_files": proc_list}
 
+@app.post("/api/lineage/reset")
+async def reset_lineage():
+    """Limpia las tablas lineage_edges y lineage_nodes en BigQuery y reinicia la memoria del backend."""
+    result = bigquery_service.reset_lineage_tables()
+    await ws_manager.broadcast({"type": "LINEAGE_RESET", "data": result})
+    return result
+
+@app.post("/api/lineage/reprocess-all")
+async def reprocess_all_files():
+    """
+    Reprocesa todos los archivos disponibles en Inbox y Processed
+    con el pipeline en cascada estricto y recalcula el linaje limpio en BigQuery.
+    """
+    from app.engine.cascade_pipeline import CascadePipeline
+    reprocessed = []
+
+    # 1. Reprocesar archivos en inbox
+    inbox_files = storage_service.list_inbox_files()
+    for f_name in inbox_files:
+        try:
+            res = storage_service.process_inbox_file(f_name)
+            bigquery_service.save_pipeline_result(res)
+            reprocessed.append({"file": f_name, "status": "SUCCESS", "source": "inbox"})
+        except Exception as ex:
+            reprocessed.append({"file": f_name, "status": "ERROR", "error": str(ex), "source": "inbox"})
+
+    # 2. Si hay archivos procesados archivados, reanalizarlos
+    proc_files = storage_service.list_processed_files(limit=100)
+    for p in proc_files:
+        fname = p.get("name")
+        if fname and fname.endswith((".log", ".sh", ".py", ".sql", ".xml", ".dsx")):
+            try:
+                content = storage_service.get_processed_file_content(fname)
+                if content and not content.startswith("# Contenido"):
+                    res = CascadePipeline.process_file(fname, content)
+                    bigquery_service.save_pipeline_result(res)
+                    reprocessed.append({"file": fname, "status": "REPROCESSED", "source": "processed"})
+            except Exception as ex:
+                reprocessed.append({"file": fname, "status": "ERROR", "error": str(ex), "source": "processed"})
+
+    await ws_manager.broadcast({"type": "LINEAGE_UPDATED", "reprocessed_count": len(reprocessed)})
+    return {"reprocessed": reprocessed, "total": len(reprocessed)}
+
 # -------------------------------------------------------------
 # RUTAS DE TELEMETRÍA EN TIEMPO REAL
 # -------------------------------------------------------------

@@ -114,8 +114,10 @@ const layoutProximityDashboard = (
     'SHELL:lanzar_carga_ejemplotabla1.sh',
     'AIRFLOW_COMPOSER:dag_carga_ejemplotabla1',
     'AIRFLOW_COMPOSER:dag_carga_ejemplotabla1.cargar_csv_a_bigquery',
+    'SHELL:lanzar_carga_ejemplotabla2.sh',
+    'AIRFLOW_COMPOSER:dag_carga_ejemplotabla2',
+    'AIRFLOW_COMPOSER:dag_carga_ejemplotabla2.cargar_csv_a_bigquery',
     'AIRFLOW_COMPOSER:cargar_csv_a_bigquery',
-    'BIGQUERY:pruebasLineaje.ejemplotabla1',
   ];
 
   const connectedNodes = visibleNodes.filter((n) => connectedNodeIds.has(n.id()));

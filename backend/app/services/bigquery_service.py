@@ -210,6 +210,52 @@ class BigQueryService:
 
         return {"nodes": list(self.nodes_store.values()), "edges": list(self.edges_store.values())}
 
+    def reset_lineage_tables(self) -> Dict[str, Any]:
+        """
+        Limpia y resetea las tablas lineage_edges y lineage_nodes en BigQuery
+        y restablece el almacén local en memoria a la topología base canónica.
+        """
+        deleted_bq_edges = 0
+        deleted_bq_nodes = 0
+
+        if self.bq_client:
+            try:
+                edges_table = f"{settings.GCP_PROJECT_ID}.{settings.BQ_DATASET}.lineage_edges"
+                nodes_table = f"{settings.GCP_PROJECT_ID}.{settings.BQ_DATASET}.lineage_nodes"
+
+                # Ejecutar DELETE DML
+                q_del_edges = f"DELETE FROM `{edges_table}` WHERE TRUE"
+                job_edges = self.bq_client.query(q_del_edges)
+                job_edges.result()
+                deleted_bq_edges = job_edges.num_dml_affected_rows or 0
+
+                q_del_nodes = f"DELETE FROM `{nodes_table}` WHERE TRUE"
+                job_nodes = self.bq_client.query(q_del_nodes)
+                job_nodes.result()
+                deleted_bq_nodes = job_nodes.num_dml_affected_rows or 0
+
+                logger.info(f"Tablas de BigQuery limpiadas: {deleted_bq_nodes} nodos, {deleted_bq_edges} aristas borradas.")
+            except Exception as e:
+                logger.error(f"Error al vaciar tablas de linaje en BigQuery: {e}")
+
+        # Limpiar almacenes en memoria
+        self.nodes_store.clear()
+        self.edges_store.clear()
+        self._cached_graph = None
+        self._cached_graph_time = 0.0
+
+        # Restaurar datos base canónicos
+        self.init_demo_data()
+
+        return {
+            "success": True,
+            "message": "Tablas y memoria de linaje reseteadas exitosamente.",
+            "deleted_bq_nodes": deleted_bq_nodes,
+            "deleted_bq_edges": deleted_bq_edges,
+            "active_nodes": len(self.nodes_store),
+            "active_edges": len(self.edges_store)
+        }
+
     def save_pipeline_result(self, nodes_or_result: Any, edges: Optional[List[LineageEdge]] = None):
         """Persiste nuevos nodos y aristas descubiertos en memoria y en BigQuery.
         Acepta tanto un objeto PipelineResult individual como (nodes, edges) separados.
