@@ -22,9 +22,14 @@ def run_tests():
         )
         node_ids = [n.id for n in bq_data["nodes"]]
         assert "BIGQUERY:pruebasLineaje.ejemplotabla1" in node_ids, "Debe detectar pruebasLineaje.ejemplotabla1"
+        assert "BIGQUERY:pruebasLineaje.vista_ejemplotabla_uno" in node_ids, "Debe detectar pruebasLineaje.vista_ejemplotabla_uno"
         target_node = next(n for n in bq_data["nodes"] if n.id == "BIGQUERY:pruebasLineaje.ejemplotabla1")
         assert target_node.metadata.get("dataset") == "pruebasLineaje"
-        details.append("Detección multi-dataset de pruebasLineaje.ejemplotabla1 y metadata [OK]")
+        view_node = next(n for n in bq_data["nodes"] if n.id == "BIGQUERY:pruebasLineaje.vista_ejemplotabla_uno")
+        assert view_node.layer == "ANALYTICS"
+        edge_ids = [e.id for e in bq_data["edges"]]
+        assert "BIGQUERY:pruebasLineaje.ejemplotabla1->BIGQUERY:pruebasLineaje.vista_ejemplotabla_uno" in edge_ids, "Debe existir arista ejemplotabla1 -> vista_ejemplotabla_uno"
+        details.append("Detección multi-dataset de pruebasLineaje.ejemplotabla1, vista_ejemplotabla_uno y arista de transformación [OK]")
 
         # 2. Control de Costos de Modelos IA y Alertas de Presupuesto
         usage_flash = bigquery_service.log_model_usage(
