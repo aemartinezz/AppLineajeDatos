@@ -2,9 +2,13 @@ import os
 import re
 import time
 import json
+import logging
 from typing import List, Tuple, Optional
+import httpx
 import sqlglot
 from sqlglot import exp
+
+logger = logging.getLogger(__name__)
 
 from app.models.schemas import (
     ToolType, RelationType, InferenceMethod, ExecutionStatus,
@@ -473,19 +477,102 @@ class CascadePipeline:
         return "\n".join(relevant_lines[:30]) if relevant_lines else content[:500]
 
     @classmethod
+    def _call_vertex_gemini(cls, model_name: str, prompt: str) -> Optional[List[Tuple[ToolType, str, RelationType, float, str]]]:
+        """
+        Invoca la API REST oficial de Vertex AI Gemini en Google Cloud.
+        Requiere roles/aiplatform.user en la Service Account y aiplatform.googleapis.com habilitado.
+        Si está en modo mock o falla la conexión/permisos, retorna None para ejecutar fallback semántico.
+        """
+        if settings.USE_MOCK_GCP:
+            return None
+
+        try:
+            import google.auth
+            from google.auth.transport.requests import Request
+            
+            credentials, project_id = google.auth.default(scopes=['https://www.googleapis.com/auth/cloud-platform'])
+            credentials.refresh(Request())
+            token = credentials.token
+            
+            project = settings.GCP_PROJECT_ID or project_id or "crp-poc-it-hackathon-13"
+            region = "us-central1"
+            
+            url = f"https://{region}-aiplatform.googleapis.com/v1/projects/{project}/locations/{region}/publishers/google/models/{model_name}:generateContent"
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json"
+            }
+            
+            system_instruction = (
+                "Eres un experto en linaje de datos de arquitectura corporativa (BigQuery, Airflow Composer, DataStage, Control-M, Shell). "
+                "Analiza el siguiente fragmento de código/log y responde ÚNICAMENTE con un objeto JSON válido con la clave 'relations', "
+                "donde cada elemento tenga: 'target_tool' (BIGQUERY, DATASTAGE, AIRFLOW_COMPOSER, SHELL, CONTROL_M), "
+                "'target_name' (nombre del componente), 'relation_type' (WRITES_TO, READS_FROM, TRIGGERS, EXECUTES, LOADS_INTO), "
+                "'confidence' (float entre 0.8 y 1.0) y 'evidence' (explicación breve). "
+                "No uses Markdown ni bloques de código, solo texto JSON puro."
+            )
+            
+            payload = {
+                "contents": [{
+                    "role": "user",
+                    "parts": [{"text": f"{system_instruction}\n\nFragmento:\n{prompt}"}]
+                }],
+                "generationConfig": {
+                    "temperature": 0.1,
+                    "maxOutputTokens": 800
+                }
+            }
+            
+            with httpx.Client(timeout=8.0) as client:
+                response = client.post(url, headers=headers, json=payload)
+                if response.status_code == 200:
+                    data = response.json()
+                    candidates = data.get("candidates", [])
+                    if candidates:
+                        raw_text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "").strip()
+                        if raw_text.startswith("```"):
+                            raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text)
+                            raw_text = re.sub(r"\s*```$", "", raw_text)
+                        parsed_json = json.loads(raw_text)
+                        relations = parsed_json.get("relations", [])
+                        results = []
+                        for r in relations:
+                            t_tool = ToolType(r.get("target_tool", "BIGQUERY")) if r.get("target_tool") in ToolType._value2member_map_ else ToolType.BIGQUERY
+                            t_name = str(r.get("target_name", ""))
+                            t_rel = RelationType(r.get("relation_type", "WRITES_TO")) if r.get("relation_type") in RelationType._value2member_map_ else RelationType.WRITES_TO
+                            t_conf = float(r.get("confidence", 0.90))
+                            t_evid = str(r.get("evidence", f"Inferencia Vertex AI {model_name}"))
+                            if t_name:
+                                results.append((t_tool, t_name, t_rel, t_conf, t_evid))
+                        if results:
+                            return results
+                else:
+                    logger.warning(f"Vertex AI {model_name} retornó código {response.status_code}: {response.text[:200]}")
+        except Exception as e:
+            logger.warning(f"Error consultando Vertex AI {model_name}: {e}. Se utilizará fallback semántico.")
+            
+        return None
+
+    @classmethod
     def _try_level_3_gemini_flash(cls, file_name: str, snippet: str, tool: ToolType) -> Tuple[bool, List[LineageNode], List[LineageEdge], float]:
-        """Invocación del modelo rápido Gemini 1.5 Flash (o motor de inferencia semántica)."""
+        """Invocación del modelo rápido Gemini 1.5 Flash en Vertex AI con fallback semántico."""
         node_id_self = f"{tool.value}:{file_name}"
         nodes = [LineageNode(id=node_id_self, name=file_name, tool_type=tool, layer="PROCESSING")]
         edges = []
 
-        # En caso de estar en modo local o sin API key de Vertex AI, ejecuta el motor de inferencia inteligente
-        # capaz de deducir variables dinámicas en el snippet:
-        inferred = cls._smart_semantic_inference(file_name, snippet, tool)
+        model_name = getattr(current_app_config.models_settings, 'light_model_name', 'gemini-1.5-flash')
+        
+        # 1. Intentar llamar a Vertex AI Gemini si está configurado en GCP
+        vertex_results = cls._call_vertex_gemini(model_name, snippet)
+        
+        # 2. Si no hubo resultados de Vertex AI, recurrir a inferencia semántica local
+        inferred = vertex_results or cls._smart_semantic_inference(file_name, snippet, tool)
+        
         if inferred:
             for target_type, target_name, rel, conf, evidence in inferred:
                 target_id = f"{target_type.value}:{target_name}"
-                nodes.append(LineageNode(id=target_id, name=target_name, tool_type=target_type, layer="PROCESSING"))
+                layer = "STORAGE" if target_type == ToolType.BIGQUERY else "PROCESSING"
+                nodes.append(LineageNode(id=target_id, name=target_name, tool_type=target_type, layer=layer))
                 edges.append(LineageEdge(
                     id=f"{node_id_self}->{target_id}",
                     source_id=node_id_self,
@@ -502,11 +589,32 @@ class CascadePipeline:
 
     @classmethod
     def _level_4_gemini_pro(cls, file_name: str, snippet: str, tool: ToolType) -> Tuple[List[LineageNode], List[LineageEdge], float]:
-        """Invocación del modelo avanzado Gemini 1.5 Pro para casos de alta ambigüedad."""
+        """Invocación del modelo avanzado Gemini 1.5 Pro en Vertex AI con fallback semántico."""
         node_id_self = f"{tool.value}:{file_name}"
         nodes = [LineageNode(id=node_id_self, name=file_name, tool_type=tool, layer="PROCESSING")]
-        
-        # Heurística profunda de resolución para scripts complejos
+        edges = []
+
+        model_name = getattr(current_app_config.models_settings, 'advanced_model_name', 'gemini-1.5-pro')
+        vertex_results = cls._call_vertex_gemini(model_name, snippet)
+
+        if vertex_results:
+            for target_type, target_name, rel, conf, evidence in vertex_results:
+                target_id = f"{target_type.value}:{target_name}"
+                layer = "STORAGE" if target_type == ToolType.BIGQUERY else "PROCESSING"
+                nodes.append(LineageNode(id=target_id, name=target_name, tool_type=target_type, layer=layer))
+                edges.append(LineageEdge(
+                    id=f"{node_id_self}->{target_id}",
+                    source_id=node_id_self,
+                    target_id=target_id,
+                    relation_type=rel,
+                    confidence_score=conf,
+                    inference_method=InferenceMethod.GEMINI_PRO,
+                    evidence_snippet=evidence
+                ))
+            avg_conf = sum(e.confidence_score for e in edges) / len(edges)
+            return nodes, edges, avg_conf
+
+        # Heurística profunda de resolución para scripts complejos si Vertex AI no respondió
         edges = [
             LineageEdge(
                 id=f"{node_id_self}->GENERIC:unknown_dependency",
@@ -515,7 +623,7 @@ class CascadePipeline:
                 relation_type=RelationType.DEPENDS_ON,
                 confidence_score=0.75,
                 inference_method=InferenceMethod.GEMINI_PRO,
-                evidence_snippet=f"Inferencia profunda Gemini Pro sobre snippet de {file_name}"
+                evidence_snippet=f"Inferencia profunda sobre snippet de {file_name} (Fallback local)"
             )
         ]
         return nodes, edges, 0.75

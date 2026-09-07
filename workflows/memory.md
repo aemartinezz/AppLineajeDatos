@@ -23,6 +23,7 @@ Este documento constituye la **memoria viva del proyecto**. Registra todas las d
 - **ADR-015:** Aislamiento Canónico de Tareas Airflow por DAG y Blindaje Estricto Anti-Colisión de Linaje
 - **ADR-016:** Recolector Multi-Fuente de Linaje BigQuery (Vistas, Rutinas y Tablas Externas con SQLGlot)
 - **ADR-017:** Principio de Menor Privilegio IAM, Service Account Dedicada y Parametrización Total de Datasets y Recursos GCP
+- **ADR-018:** Integración Vertex AI Gemini, Permisos de Menor Privilegio y Prerrequisitos de Despliegue Día 0
 
 ---
 
@@ -236,6 +237,24 @@ Este documento constituye la **memoria viva del proyecto**. Registra todas las d
   4. **Guía Interactiva IAM en Frontend:**
      - Se integró un panel interactivo colapsable en `ConfigView.tsx` con todos los comandos `gcloud` listos para copiar y ejecutar, adaptados dinámicamente a los valores configurados de proyecto, dataset, buckets y cuenta de servicio.
 - **Impacto:** Cumplimiento total de auditoría y seguridad corporativa, portabilidad inmediata a cualquier proyecto GCP sin fricción de permisos y control visual completo sobre los recursos de infraestructura.
+
+---
+
+### ADR-018: Integración Vertex AI Gemini, Permisos de Menor Privilegio y Prerrequisitos de Despliegue Día 0
+
+- **Contexto:**
+  1. El pipeline en cascada contemplaba el uso de Gemini 1.5 Flash (Nivel 3) y Gemini 1.5 Pro (Nivel 4), pero su implementación residía en un motor semántico heurístico local (`_smart_semantic_inference`) sin conexión HTTP activa hacia Vertex AI.
+  2. En auditoría de GCP sobre `crp-poc-it-hackathon-13`, se constató que la API `aiplatform.googleapis.com` estaba habilitada pero las llamadas a los modelos fundacionales arrojaban `404 NOT_FOUND: Publisher model was not found or your project does not have access to it` si la identidad carecía del rol explícito `roles/aiplatform.user` (roles como `roles/editor` o `roles/bigquery.admin` no otorgan acceso a los modelos fundacionales de Vertex AI).
+  3. Al trasladar la plataforma a proyectos nuevos de Google Cloud, los despliegues fallaban si no se aseguraba previamente que el proyecto tuviera facturación vinculada (Billing Día 0), si el operador carecía de los permisos de aprovisionamiento indispensables o si los datasets y buckets no estaban creados.
+- **Decisión:**
+  1. **Conector Oficial REST a Vertex AI:** Se implementó en `backend/app/engine/cascade_pipeline.py` el método `_call_vertex_gemini` que invoca `https://{region}-aiplatform.googleapis.com/v1/projects/{project}/locations/{region}/publishers/google/models/{model}:generateContent` utilizando Bearer Tokens de Application Default Credentials (ADC).
+  2. **Arquitectura de Fallback Resiliente:** Si `USE_MOCK_GCP=true`, o si la API de Vertex AI responde con error (404, 403 o agotamiento de cuota), el pipeline captura la excepción, emite una advertencia al log y conmuta de manera 100% transparente y automática a `_smart_semantic_inference`, garantizando que el procesamiento de linaje nunca se detenga.
+  3. **Menor Privilegio para Modelos Fundacionales Gemini:** Se estableció como regla de seguridad inviolable que la Service Account backend solo requiere el rol **`roles/aiplatform.user`** (permiso `aiplatform.endpoints.predict`). Queda terminantemente vetado `roles/aiplatform.admin`.
+  4. **Formalización de Prerrequisitos de Día 0 en Frontend y Docs:** Se estructuró el **Paso 0** en la Guía IAM interactiva de `ConfigView.tsx` y en `operations-deployment.md`, detallando:
+     - Vinculación obligatoria de facturación activa (`gcloud billing projects link`).
+     - Matriz de menor privilegio para el Ingeniero/Operador DevOps (sin requerir rol Owner).
+     - Comandos para la pre-creación del dataset en BigQuery y los buckets en Google Cloud Storage.
+- **Impacto:** Conexión real con la inteligencia artificial de Google Cloud, protección ante caídas o falta de cuota mediante fallback determinista, cumplimiento corporativo riguroso de menor privilegio y guía integral de aprovisionamiento reproducible para cualquier entorno empresarial.
 
 
 

@@ -930,14 +930,130 @@ export const ConfigView: React.FC<ConfigViewProps> = ({ onBack, userRole = 'Deve
           {showIamGuide && (
             <div style={{ marginTop: '20px', borderTop: '1px solid #E2E8F0', paddingTop: '18px' }}>
               <div style={{ marginBottom: '16px', backgroundColor: '#F0FDF4', border: '1px solid #BBF7D0', padding: '12px 16px', borderRadius: '8px', fontSize: '12px', color: '#166534' }}>
-                <strong>Seguridad Corporativa:</strong> No utilice roles amplios como <code>roles/owner</code>, <code>roles/editor</code> ni <code>roles/bigquery.admin</code>. La Service Account únicamente requiere permisos de edición acotados al dataset de la app y lectura de objetos en los buckets específicos.
+                <strong>Seguridad y Menor Privilegio (Least Privilege):</strong> En cumplimiento con las directivas corporativas de Liverpool, ningún servicio u operador debe utilizar roles de superadministrador como <code>roles/owner</code>, <code>roles/editor</code> ni <code>roles/bigquery.admin</code>. La Service Account únicamente requiere permisos de inferencia (<code>roles/aiplatform.user</code>), ejecución de consultas (<code>roles/bigquery.jobUser</code>), edición acotada al dataset de la app y acceso restringido a sus propios buckets.
+              </div>
+
+              {/* Paso 0: Prerrequisitos de Día 0 */}
+              <div style={{ marginBottom: '22px', backgroundColor: '#F8FAFC', border: '1px solid #CBD5E1', borderRadius: '8px', padding: '16px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
+                  <ShieldCheck size={18} color="#731853" />
+                  <span style={{ fontSize: '13px', fontWeight: 800, color: '#1E293B' }}>
+                    Paso 0: Prerrequisitos de Día 0 (Antes de Instalar en Otro Proyecto)
+                  </span>
+                </div>
+                <div style={{ fontSize: '12px', color: '#475569', marginBottom: '14px', lineHeight: 1.5 }}>
+                  Antes de intentar ejecutar cualquier script de despliegue en un nuevo proyecto de Google Cloud, asegúrate de cumplir con los siguientes tres prerrequisitos fundamentales:
+                </div>
+
+                {/* 0.1 Facturación Activa */}
+                <div style={{ marginBottom: '14px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                    <span style={{ fontSize: '11px', fontWeight: 700, color: '#334155' }}>
+                      0.1 Vincular Cuenta de Facturación Activa (Billing)
+                    </span>
+                    <button
+                      onClick={() => copyToClipboard(`PROJECT_ID="${config.storage_config?.gcp_project_id || 'crp-poc-it-hackathon-13'}"
+# 1. Comprobar si el proyecto tiene facturación habilitada
+gcloud billing projects describe "$PROJECT_ID"
+
+# 2. Si no tiene facturación vinculada, asociar a tu cuenta de billing (reemplazar con ID real)
+# gcloud billing projects link "$PROJECT_ID" --billing-account="XXXXXX-XXXXXX-XXXXXX"`, 'billing')}
+                      className="btn-outline"
+                      style={{ fontSize: '11px', padding: '3px 8px', display: 'flex', alignItems: 'center', gap: '4px' }}
+                    >
+                      <Copy size={11} /> {copiedCmd === 'billing' ? '¡Copiado!' : 'Copiar'}
+                    </button>
+                  </div>
+                  <pre style={{ backgroundColor: '#0F172A', color: '#F8FAFC', padding: '10px', borderRadius: '6px', fontSize: '11px', overflowX: 'auto', margin: 0, fontFamily: 'monospace' }}>
+{`PROJECT_ID="${config.storage_config?.gcp_project_id || 'crp-poc-it-hackathon-13'}"
+# Verificar estado de facturación (Requisito indispensable para Cloud Run, Cloud Build y Vertex AI)
+gcloud billing projects describe "$PROJECT_ID"`}
+                  </pre>
+                </div>
+
+                {/* 0.2 Permisos del Operador DevOps */}
+                <div style={{ marginBottom: '14px' }}>
+                  <span style={{ fontSize: '11px', fontWeight: 700, color: '#334155', display: 'block', marginBottom: '4px' }}>
+                    0.2 Permisos Mínimos Requeridos para el Ingeniero/Operador DevOps (Sin ser Owner)
+                  </span>
+                  <div style={{ fontSize: '11px', color: '#64748B', marginBottom: '8px', lineHeight: 1.4 }}>
+                    El colaborador que corre los comandos de instalación NO necesita ser <code>roles/owner</code>. Solo requiere los siguientes roles acotados:
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '8px' }}>
+                    <div style={{ backgroundColor: '#FFFFFF', padding: '8px 10px', borderRadius: '6px', border: '1px solid #E2E8F0', fontSize: '11px' }}>
+                      <strong style={{ color: '#0F172A' }}>roles/serviceusage.serviceUsageAdmin</strong>
+                      <div style={{ color: '#64748B', fontSize: '10px' }}>Habilitar APIs requeridas de GCP</div>
+                    </div>
+                    <div style={{ backgroundColor: '#FFFFFF', padding: '8px 10px', borderRadius: '6px', border: '1px solid #E2E8F0', fontSize: '11px' }}>
+                      <strong style={{ color: '#0F172A' }}>roles/resourcemanager.projectIamAdmin</strong>
+                      <div style={{ color: '#64748B', fontSize: '10px' }}>Conceder roles a la Service Account</div>
+                    </div>
+                    <div style={{ backgroundColor: '#FFFFFF', padding: '8px 10px', borderRadius: '6px', border: '1px solid #E2E8F0', fontSize: '11px' }}>
+                      <strong style={{ color: '#0F172A' }}>roles/iam.serviceAccountAdmin</strong>
+                      <div style={{ color: '#64748B', fontSize: '10px' }}>Crear la SA sa-applineaje-backend</div>
+                    </div>
+                    <div style={{ backgroundColor: '#FFFFFF', padding: '8px 10px', borderRadius: '6px', border: '1px solid #E2E8F0', fontSize: '11px' }}>
+                      <strong style={{ color: '#0F172A' }}>roles/run.admin</strong>
+                      <div style={{ color: '#64748B', fontSize: '10px' }}>Desplegar servicios en Cloud Run</div>
+                    </div>
+                    <div style={{ backgroundColor: '#FFFFFF', padding: '8px 10px', borderRadius: '6px', border: '1px solid #E2E8F0', fontSize: '11px' }}>
+                      <strong style={{ color: '#0F172A' }}>roles/cloudbuild.builds.editor</strong>
+                      <div style={{ color: '#64748B', fontSize: '10px' }}>Compilar imágenes de contenedor</div>
+                    </div>
+                    <div style={{ backgroundColor: '#FFFFFF', padding: '8px 10px', borderRadius: '6px', border: '1px solid #E2E8F0', fontSize: '11px' }}>
+                      <strong style={{ color: '#0F172A' }}>roles/artifactregistry.admin</strong>
+                      <div style={{ color: '#64748B', fontSize: '10px' }}>Repositorio de artefactos Docker</div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 0.3 Creación de Recursos Base */}
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                    <span style={{ fontSize: '11px', fontWeight: 700, color: '#334155' }}>
+                      0.3 Crear Recursos Base Previos (Dataset BigQuery y Buckets GCS)
+                    </span>
+                    <button
+                      onClick={() => copyToClipboard(`PROJECT_ID="${config.storage_config?.gcp_project_id || 'crp-poc-it-hackathon-13'}"
+REGION="us-central1"
+BQ_DATASET="${config.storage_config?.bq_dataset || 'applineajedatos'}"
+INBOX_BUCKET="${(config.storage_config?.inbox_bucket || 'datosdeentrada').replace('gs://', '')}"
+PROCESSED_BUCKET="${(config.storage_config?.processed_bucket || 'datosprocesadosapp').replace('gs://', '')}"
+
+# 1. Crear Dataset de la Aplicación en BigQuery (si no existe)
+bq mk --dataset --location="$REGION" "$PROJECT_ID:$BQ_DATASET"
+
+# 2. Crear Buckets de Entrada y Procesados en GCS (si no existen)
+gcloud storage buckets create "gs://$INBOX_BUCKET" --project="$PROJECT_ID" --location="$REGION" --uniform-bucket-level-access
+gcloud storage buckets create "gs://$PROCESSED_BUCKET" --project="$PROJECT_ID" --location="$REGION" --uniform-bucket-level-access`, 'base_resources')}
+                      className="btn-outline"
+                      style={{ fontSize: '11px', padding: '3px 8px', display: 'flex', alignItems: 'center', gap: '4px' }}
+                    >
+                      <Copy size={11} /> {copiedCmd === 'base_resources' ? '¡Copiado!' : 'Copiar'}
+                    </button>
+                  </div>
+                  <pre style={{ backgroundColor: '#0F172A', color: '#F8FAFC', padding: '10px', borderRadius: '6px', fontSize: '11px', overflowX: 'auto', margin: 0, fontFamily: 'monospace' }}>
+{`PROJECT_ID="${config.storage_config?.gcp_project_id || 'crp-poc-it-hackathon-13'}"
+REGION="us-central1"
+BQ_DATASET="${config.storage_config?.bq_dataset || 'applineajedatos'}"
+INBOX_BUCKET="${(config.storage_config?.inbox_bucket || 'datosdeentrada').replace('gs://', '')}"
+PROCESSED_BUCKET="${(config.storage_config?.processed_bucket || 'datosprocesadosapp').replace('gs://', '')}"
+
+# 1. Crear Dataset en BigQuery (si no existe)
+bq mk --dataset --location="$REGION" "$PROJECT_ID:$BQ_DATASET"
+
+# 2. Crear Buckets en Google Cloud Storage (si no existen)
+gcloud storage buckets create "gs://$INBOX_BUCKET" --project="$PROJECT_ID" --location="$REGION" --uniform-bucket-level-access
+gcloud storage buckets create "gs://$PROCESSED_BUCKET" --project="$PROJECT_ID" --location="$REGION" --uniform-bucket-level-access`}
+                  </pre>
+                </div>
               </div>
 
               {/* Paso 1: Habilitar APIs */}
               <div style={{ marginBottom: '18px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
                   <span style={{ fontSize: '12px', fontWeight: 700, color: '#334155' }}>
-                    Paso 1: Habilitar APIs Requeridas en el Proyecto
+                    Paso 1: Habilitar APIs Requeridas en el Proyecto (Incluye Vertex AI para Gemini)
                   </span>
                   <button
                     onClick={() => copyToClipboard(`gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com bigquery.googleapis.com storage.googleapis.com aiplatform.googleapis.com logging.googleapis.com --project="${config.storage_config?.gcp_project_id || 'crp-poc-it-hackathon-13'}"`, 'apis')}
@@ -946,6 +1062,9 @@ export const ConfigView: React.FC<ConfigViewProps> = ({ onBack, userRole = 'Deve
                   >
                     <Copy size={11} /> {copiedCmd === 'apis' ? '¡Copiado!' : 'Copiar'}
                   </button>
+                </div>
+                <div style={{ fontSize: '11px', color: '#64748B', marginBottom: '6px' }}>
+                  Nota: <code>aiplatform.googleapis.com</code> es obligatoria para invocar modelos fundacionales de Gemini 1.5 Flash y Gemini 1.5 Pro.
                 </div>
                 <pre style={{ backgroundColor: '#0F172A', color: '#F8FAFC', padding: '12px', borderRadius: '6px', fontSize: '12px', overflowX: 'auto', margin: 0, fontFamily: 'monospace' }}>
 {`gcloud services enable \\
@@ -985,7 +1104,7 @@ export const ConfigView: React.FC<ConfigViewProps> = ({ onBack, userRole = 'Deve
               <div style={{ marginBottom: '18px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
                   <span style={{ fontSize: '12px', fontWeight: 700, color: '#334155' }}>
-                    Paso 3: Asignar Roles de Mínimo Privilegio (Proyecto, Dataset y Buckets)
+                    Paso 3: Asignar Roles de Mínimo Privilegio (Proyecto, Dataset, Buckets y Gemini)
                   </span>
                   <button
                     onClick={() => copyToClipboard(`SA_EMAIL="${config.storage_config?.service_account || `sa-applineaje-backend@${config.storage_config?.gcp_project_id || 'crp-poc-it-hackathon-13'}.iam.gserviceaccount.com`}"
@@ -994,15 +1113,15 @@ BQ_DATASET="${config.storage_config?.bq_dataset || 'applineajedatos'}"
 INBOX_BUCKET="${(config.storage_config?.inbox_bucket || 'datosdeentrada').replace('gs://', '')}"
 PROCESSED_BUCKET="${(config.storage_config?.processed_bucket || 'datosprocesadosapp').replace('gs://', '')}"
 
-# Roles a nivel Proyecto
+# 1. Roles a nivel Proyecto (Incluye roles/aiplatform.user para inferencia de Gemini)
 gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$SA_EMAIL" --role="roles/bigquery.jobUser"
 gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$SA_EMAIL" --role="roles/aiplatform.user"
 gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$SA_EMAIL" --role="roles/logging.logWriter"
 
-# Rol a nivel Dataset de la App (sin ser BigQuery Admin)
+# 2. Rol a nivel Dataset de la App (sin ser BigQuery Admin)
 bq add-iam-policy-binding --member="serviceAccount:$SA_EMAIL" --role="roles/bigquery.dataEditor" "$PROJECT_ID:$BQ_DATASET"
 
-# Roles a nivel Buckets (sin ser Storage Admin)
+# 3. Roles a nivel Buckets (sin ser Storage Admin)
 gcloud storage buckets add-iam-policy-binding "gs://$INBOX_BUCKET" --member="serviceAccount:$SA_EMAIL" --role="roles/storage.objectAdmin"
 gcloud storage buckets add-iam-policy-binding "gs://$PROCESSED_BUCKET" --member="serviceAccount:$SA_EMAIL" --role="roles/storage.objectAdmin"`, 'roles')}
                     className="btn-outline"
@@ -1011,6 +1130,9 @@ gcloud storage buckets add-iam-policy-binding "gs://$PROCESSED_BUCKET" --member=
                     <Copy size={11} /> {copiedCmd === 'roles' ? '¡Copiado!' : 'Copiar'}
                   </button>
                 </div>
+                <div style={{ fontSize: '11px', color: '#64748B', marginBottom: '8px' }}>
+                  <strong>Detalle de Gemini:</strong> <code>roles/aiplatform.user</code> otorga el permiso granular <code>aiplatform.endpoints.predict</code> para generar respuestas de IA sin requerir <code>roles/aiplatform.admin</code>.
+                </div>
                 <pre style={{ backgroundColor: '#0F172A', color: '#F8FAFC', padding: '12px', borderRadius: '6px', fontSize: '12px', overflowX: 'auto', margin: 0, fontFamily: 'monospace' }}>
 {`SA_EMAIL="${config.storage_config?.service_account || `sa-applineaje-backend@${config.storage_config?.gcp_project_id || 'crp-poc-it-hackathon-13'}.iam.gserviceaccount.com`}"
 PROJECT_ID="${config.storage_config?.gcp_project_id || 'crp-poc-it-hackathon-13'}"
@@ -1018,15 +1140,15 @@ BQ_DATASET="${config.storage_config?.bq_dataset || 'applineajedatos'}"
 INBOX_BUCKET="${(config.storage_config?.inbox_bucket || 'datosdeentrada').replace('gs://', '')}"
 PROCESSED_BUCKET="${(config.storage_config?.processed_bucket || 'datosprocesadosapp').replace('gs://', '')}"
 
-# 1. Ejecutar consultas y llamadas a IA a nivel Proyecto
+# 1. Consultas SQL, Inferencia con Gemini (Vertex AI) y Logs a nivel Proyecto
 gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$SA_EMAIL" --role="roles/bigquery.jobUser"
 gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$SA_EMAIL" --role="roles/aiplatform.user"
 gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$SA_EMAIL" --role="roles/logging.logWriter"
 
-# 2. Permisos de datos únicamente sobre el Dataset de la Aplicación
+# 2. Permisos de datos únicamente sobre el Dataset de la Aplicación (Menor Privilegio)
 bq add-iam-policy-binding --member="serviceAccount:$SA_EMAIL" --role="roles/bigquery.dataEditor" "$PROJECT_ID:$BQ_DATASET"
 
-# 3. Permisos de archivos únicamente sobre los Buckets de la Aplicación
+# 3. Permisos de archivos únicamente sobre los Buckets de la Aplicación (Menor Privilegio)
 gcloud storage buckets add-iam-policy-binding "gs://$INBOX_BUCKET" --member="serviceAccount:$SA_EMAIL" --role="roles/storage.objectAdmin"
 gcloud storage buckets add-iam-policy-binding "gs://$PROCESSED_BUCKET" --member="serviceAccount:$SA_EMAIL" --role="roles/storage.objectAdmin"`}
                 </pre>

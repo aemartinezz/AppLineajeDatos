@@ -63,18 +63,29 @@ Este documento establece las **normas obligatorias de seguridad**, autenticació
      - ❌ `roles/bigquery.admin`
      - ❌ `roles/storage.admin`
    - La plataforma debe operar únicamente con los roles indispensables y delimitados por recurso:
-     - **A nivel de Proyecto GCP:**
-       - `roles/bigquery.jobUser`: Permite ejecutar consultas SQL (`bigquery.jobs.create`, `bigquery.jobs.get`).
-       - `roles/aiplatform.user`: Permite invocar modelos Gemini 1.5 Flash / Pro en Vertex AI.
-       - `roles/logging.logWriter`: Permite enviar telemetría e incidencias a Cloud Logging.
-     - **A nivel de Dataset de la Aplicación (`BQ_DATASET`):**
-       - `roles/bigquery.dataEditor`: Permite crear y actualizar las 7 tablas maestras de la aplicación sin permisos administrativos sobre el resto de BigQuery.
-     - **A nivel de Datasets Externos Monitoreados:**
-       - `roles/bigquery.metadataViewer`: Solo lectura de esquemas, `INFORMATION_SCHEMA.VIEWS` y rutinas sin acceso a datos confidenciales.
-     - **A nivel de Buckets de Almacenamiento:**
-       - `roles/storage.objectAdmin`: Concedido exclusivamente sobre `gs://$INBOX_BUCKET` y `gs://$PROCESSED_BUCKET`.
+      - **A nivel de Proyecto GCP:**
+        - `roles/bigquery.jobUser`: Permite ejecutar consultas SQL (`bigquery.jobs.create`, `bigquery.jobs.get`).
+        - `roles/aiplatform.user`: Permite invocar modelos fundacionales Gemini 1.5 Flash y Pro en Vertex AI (`aiplatform.endpoints.predict`). Queda estrictamente prohibido `roles/aiplatform.admin`.
+        - `roles/logging.logWriter`: Permite enviar telemetría e incidencias a Cloud Logging.
+      - **A nivel de Dataset de la Aplicación (`BQ_DATASET`):**
+        - `roles/bigquery.dataEditor`: Permite crear y actualizar las 7 tablas maestras de la aplicación sin permisos administrativos sobre el resto de BigQuery.
+      - **A nivel de Datasets Externos Monitoreados:**
+        - `roles/bigquery.metadataViewer`: Solo lectura de esquemas, `INFORMATION_SCHEMA.VIEWS` y rutinas sin acceso a datos confidenciales.
+      - **A nivel de Buckets de Almacenamiento:**
+        - `roles/storage.objectAdmin`: Concedido exclusivamente sobre `gs://$INBOX_BUCKET` y `gs://$PROCESSED_BUCKET`.
 
-3. **Parametrización Dinámica de la Service Account:**
+3. **Roles Mínimos del Operador DevOps (Sin ser Owner):**
+   - El ingeniero u operador que aprovisiona la plataforma en un proyecto GCP nuevo tampoco debe utilizar `roles/owner`. Debe contar únicamente con:
+     - `roles/serviceusage.serviceUsageAdmin` (habilitación de APIs).
+     - `roles/resourcemanager.projectIamAdmin` (asignación de bindings IAM a la SA).
+     - `roles/iam.serviceAccountAdmin` (creación de la SA).
+     - `roles/run.admin` (despliegue en Cloud Run).
+     - `roles/cloudbuild.builds.editor` (ejecución de builds).
+     - `roles/artifactregistry.admin` (gestión de imágenes Docker).
+     - `roles/bigquery.dataEditor` sobre el proyecto (creación del dataset inicial).
+     - `roles/storage.admin` (creación de buckets iniciales).
+
+4. **Parametrización Dinámica de la Service Account:**
    - La Service Account debe ser configurable mediante la variable `GCP_SERVICE_ACCOUNT` y reflejarse en la interfaz de configuración del frontend para auditoría.
 
 ---

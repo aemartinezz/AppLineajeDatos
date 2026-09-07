@@ -25,9 +25,52 @@ Este documento describe los **procedimientos operativos para la compilación, de
 
 ## 2. Procedimiento de Instalación en Nuevos Proyectos GCP (Menor Privilegio)
 
-Para instalar la plataforma en un proyecto nuevo de Google Cloud Platform sin utilizar permisos de superadministrador (`roles/owner`, `roles/editor` o `roles/bigquery.admin`), siga este procedimiento:
+Para instalar la plataforma en un proyecto nuevo de Google Cloud Platform sin utilizar permisos de superadministrador (`roles/owner`, `roles/editor` o `roles/bigquery.admin`), siga este procedimiento estructurado:
 
-### Paso 1: Habilitar APIs Requeridas
+### Paso 0: Prerrequisitos Previos (Día 0 - Antes de Iniciar la Instalación)
+
+Antes de ejecutar los comandos de instalación o el script automatizado, se deben verificar y cumplir los siguientes tres prerrequisitos fundamentales:
+
+1. **Cuenta de Facturación Activa (Billing):**
+   - Cloud Run, Cloud Build, Artifact Registry y Vertex AI exigen que el proyecto de GCP esté formalmente vinculado a una cuenta de facturación activa.
+   - Verificación y enlace:
+     ```bash
+     # Verificar si el proyecto tiene facturación asociada
+     gcloud billing projects describe "[PROJECT_ID]"
+
+     # Si no está vinculado, enlazar a la cuenta de facturación corporativa
+     gcloud billing projects link "[PROJECT_ID]" --billing-account="XXXXXX-XXXXXX-XXXXXX"
+     ```
+
+2. **Permisos Mínimos del Ingeniero/Operador DevOps que Ejecuta la Instalación:**
+   - En cumplimiento estricto del principio de menor privilegio, el colaborador **NO requiere ser `roles/owner` ni `roles/editor`**. Solo necesita los siguientes roles granulares en el proyecto:
+     - `roles/serviceusage.serviceUsageAdmin`: Para habilitar las APIs necesarias de Google Cloud.
+     - `roles/resourcemanager.projectIamAdmin`: Para conceder roles de IAM a la Service Account.
+     - `roles/iam.serviceAccountAdmin`: Para crear la cuenta de servicio dedicada `sa-applineaje-backend`.
+     - `roles/run.admin`: Para crear y configurar los servicios de Cloud Run.
+     - `roles/cloudbuild.builds.editor`: Para compilar los contenedores mediante Cloud Build.
+     - `roles/artifactregistry.admin`: Para almacenar las imágenes de contenedor en Artifact Registry.
+     - `roles/bigquery.dataEditor` sobre el proyecto (o creador de dataset): Para aprovisionar el dataset `BQ_DATASET`.
+     - `roles/storage.admin`: Para crear los buckets de Cloud Storage.
+
+3. **Recursos Base Pre-creados (Dataset BigQuery y Buckets GCS):**
+   - El dataset y los buckets deben existir antes de desplegar el backend:
+     ```bash
+     PROJECT_ID="[PROJECT_ID]"
+     REGION="us-central1"
+     BQ_DATASET="applineajedatos"
+     INBOX_BUCKET="[INBOX_BUCKET_NAME]"
+     PROCESSED_BUCKET="[PROCESSED_BUCKET_NAME]"
+
+     # Crear Dataset maestro de la Aplicación en BigQuery (si no existe)
+     bq mk --dataset --location="$REGION" "$PROJECT_ID:$BQ_DATASET"
+
+     # Crear Buckets de Entrada y Archivo en Google Cloud Storage (si no existen)
+     gcloud storage buckets create "gs://$INBOX_BUCKET" --project="$PROJECT_ID" --location="$REGION" --uniform-bucket-level-access
+     gcloud storage buckets create "gs://$PROCESSED_BUCKET" --project="$PROJECT_ID" --location="$REGION" --uniform-bucket-level-access
+     ```
+
+### Paso 1: Habilitar APIs Requeridas (Incluye Vertex AI para Gemini)
 ```bash
 gcloud services enable \
   run.googleapis.com \
@@ -39,6 +82,8 @@ gcloud services enable \
   logging.googleapis.com \
   --project="[PROJECT_ID]"
 ```
+> [!NOTE]
+> `aiplatform.googleapis.com` es indispensable para que los agentes de Gemini 1.5 Flash y Gemini 1.5 Pro en el pipeline de inferencia semántica (Nivel 3 y Nivel 4) puedan ser invocados.
 
 ### Paso 2: Crear Service Account Dedicada para Backend
 ```bash
@@ -79,6 +124,12 @@ gcloud storage buckets add-iam-policy-binding "gs://[PROCESSED_BUCKET]" \
   --member="serviceAccount:$SA_EMAIL" \
   --role="roles/storage.objectAdmin"
 ```
+
+> [!IMPORTANT]
+> **Detalle del Permiso para Agentes Gemini:**
+> El rol asignado a la Service Account para interactuar con los modelos Gemini 1.5 Flash y Gemini 1.5 Pro en Vertex AI es estrictamente **`roles/aiplatform.user`** (Vertex AI User).
+> - **Permiso clave requerido:** `aiplatform.endpoints.predict`.
+> - **Principio de Menor Privilegio:** Queda terminantemente prohibido asignar `roles/aiplatform.admin`, `roles/owner` o `roles/editor`. `roles/aiplatform.user` otorga la capacidad exacta de enviar prompts y generar predicciones/linaje sin facultades para alterar modelos ni administrar recursos de Vertex AI.
 
 ### Paso 4: Despliegue Automatizado con Script
 ```bash
