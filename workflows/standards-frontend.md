@@ -51,6 +51,15 @@ Toda la interfaz debe apegarse estrictamente a la paleta institucional:
 3. **Operaciones Atómicas en Batch:**
    - Ocultar o mostrar elementos siempre dentro de `cy.batch(() => { ... })` para evitar repintados innecesarios y garantizar animaciones fluidas a 60 FPS.
 
+4. **Buscador de Linaje y Trazabilidad Bidireccional:**
+   - Al buscar un término (ej. `ejemplotabla1`), localizar nodos por coincidencia parcial en `name` o `id`.
+   - Modos de aislamiento:
+     - `UPSTREAM`: Aísla nodos predecesores (`predecessors()`) para conocer la procedencia del dato.
+     - `DOWNSTREAM`: Aísla nodos sucesores (`successors()`) para evaluar impacto de modificaciones.
+     - `FULL`: Combina ambos para la cadena completa.
+   - Ocultar elementos ajenos y ordenar con Dagre de izquierda a derecha.
+   - Botón `X` para restaurar la vista completa invocando `layoutProximityDashboard`.
+
 ---
 
 ## 4. Estándares de Experiencia de Usuario (UX) y Accesibilidad
@@ -59,5 +68,7 @@ Toda la interfaz debe apegarse estrictamente a la paleta institucional:
    - Ninguna acción del usuario debe quedar sin respuesta visual. Al pulsar un botón de acción (como guardar usuario, cambiar rol o validar bucket), debe mostrarse un spinner o estado de carga inmediato.
 2. **Animaciones Suaves:**
    - Las transiciones de layout deben durar 350 ms con curva `ease-in-out-cubic`.
-3. **Consola Limpia:**
+3. **Telemetría WebSocket sin Parpadeos:**
+   - Los eventos de estado recibidos por WebSocket (`STATUS_UPDATE`) deben modificar puntualmente el estilo del nodo (`border-color`) sin destruir ni recrear la instancia del canvas de Cytoscape.
+4. **Consola Limpia:**
    - La consola del navegador debe mantenerse en **0 errores de JavaScript**. Cualquier excepción no capturada debe reportarse al backend vía `/api/errors/report`.

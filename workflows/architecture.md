@@ -114,3 +114,21 @@ sequenceDiagram
 - **`services/bigquery_service.py`:** Capa de datos con queries parametrizadas y emulación en memoria para desarrollo local.
 - **`services/storage_service.py`:** Abstracción de GCS con mitigación estricta de Path Traversal.
 - **`services/init_db.py`:** DDLs idempotentes con inicialización automática de datasets y tablas.
+
+---
+
+## 5. Módulos Web de la Aplicación (Menú de Navegación)
+
+La aplicación web ofrece 8 módulos especializados diseñados para cubrir las necesidades operativas de ingenieros de datos, arquitectos, administradores y auditores:
+
+| Módulo | Componente React | Roles con Acceso | Funcionalidad Principal |
+|--------|------------------|:----------------:|-------------------------|
+| **1. Grafo Linaje** | `LineageGraphView.tsx` | Todos (incluye `Viewer`) | Visualización interactiva del grafo end-to-end con layout de proximidad, filtros de tecnología (BigQuery, DataStage, Composer, Control-M, Shell), buscador con aislamiento bidireccional upstream/downstream y slider de certeza (0% a 100%). |
+| **2. Estatus en Vivo** | `LiveStatusView.tsx` | Todos | Monitoreo en tiempo real del estado de ejecución diaria de los jobs mediante semáforos (🟢 Éxito, 🔵 Ejecutando, 🔴 Fallo, ⚪ Pendiente) sincronizados por WebSocket. |
+| **3. Arquitectura Viva** | `ArchitectureView.tsx` | `Developer`, `Admin` | Grafo de introspección del código fuente del sistema. Permite filtrar por capa (Frontend vs Backend), módulo web, y consultar librerías, endpoints y dependencias activas. |
+| **4. Bandeja Archivos** | `FileDropzoneView.tsx` | `Data Engineer`, `Admin` | Visor de archivos procesados en Cloud Storage e interfaz de subida manual de scripts y logs para pruebas puntuales. |
+| **5. Usuarios y Roles** | `UserRolesView.tsx` | `Admin` | CRUD administrativo de colaboradores con dominio corporativo `@liverpool.com.mx`. Asignación de roles RBAC, suspensión/reactivación y eliminación con protección blindada para `ADMIN_ROOT`. |
+| **6. Configuración** | `ConfigView.tsx` | `Admin` | Parámetros dinámicos de persistencia: selección de modelos de Gemini, configuración y validación de buckets de GCS (inbox/processed), y validación de proyectos GCP monitoreados. |
+| **7. Control Costos IA** | `CostsView.tsx` | `Admin`, `Developer` | Auditoría financiera de consumo de tokens y costos en dólares por modelo. Configuración de presupuesto mensual en USD y umbral de alerta porcentual. |
+| **8. Gestión Errores** | `ErrorsView.tsx` | `Admin`, `Developer` | Consola de incidencias centralizada con telemetría enriquecida ("carnita"): stack trace completo, severidad, URL, componente origen y ciclo de vida de resolución/auto-reapertura. |
+

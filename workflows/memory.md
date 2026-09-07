@@ -14,6 +14,12 @@ Este documento constituye la **memoria viva del proyecto**. Registra todas las d
 - **ADR-006:** Gobernanza y Control Presupuestario de Modelos de Lenguaje (IA)
 - **ADR-007:** Algoritmo Adaptativo de Proximidad Dashboard (`layoutProximityDashboard`)
 - **ADR-008:** Cajas de Nodos Responsivas en Cytoscape y Prevención de Desbordamientos
+- **ADR-009:** Telemetría Enriquecida de Incidencias ("Carnita") y Auto-Reapertura de Errores
+- **ADR-010:** Feedback Visual Inmediato y CRUD Completo de Usuarios Corporativos
+- **ADR-011:** Multi-Proyecto GCP Monitoreado y Validación de Conectividad BigQuery
+- **ADR-012:** Introspección de Arquitectura Viva con Clasificación por Capas y Módulos Web
+- **ADR-013:** Aislamiento Bidireccional de Subgrafos y Operaciones Atómicas en Batch de Cytoscape
+- **ADR-014:** Estrategia de Rendimiento y Tuneo: Pre-Cálculo y Persistencia de Linaje en BigQuery
 
 ---
 
@@ -72,7 +78,7 @@ Este documento constituye la **memoria viva del proyecto**. Registra todas las d
 
 ### ADR-005: Ingesta Asíncrona Continua vía GCS Inbox Background Watcher
 
-- **Contexto:** En operaciones reales, los procesos de batch depositan archivos directamente en buckets de Cloud Storage; los operadores no cargan archivos manualmente por la web.
+- **Contexto:** En operaciones reales, los procesos de batch depositan archivos directamente en buckets de Cloud Storage; los operadores no cargan archivos manualmente por la web. La vista `Bandeja Archivos` es un visor auxiliar, no la vía principal de entrada.
 - **Decisión:** Se creó `gcs_inbox_background_watcher`, una tarea asíncrona de fondo iniciada en el `lifespan` de FastAPI que escanea periódicamente el bucket `crp-poc-it-hackathon-13_inbox`. Al detectar nuevos archivos, los procesa por el pipeline en cascada, traslada los procesados al bucket `processed/`, actualiza el grafo en BigQuery y emite eventos vía WebSocket a los clientes conectados.
 - **Impacto:** Ingesta desatendida y reactiva en tiempo real.
 
@@ -92,9 +98,10 @@ Este documento constituye la **memoria viva del proyecto**. Registra todas las d
 ### ADR-007: Algoritmo Adaptativo de Proximidad Dashboard (`layoutProximityDashboard`)
 
 - **Contexto:** En la vista "Todas", Cytoscape distribuía los nodos según el orden del array. Las tablas conectadas (`stg_transacciones_raw`, `sp_procesar_transacciones`, `dim_clientes`) quedaban en las filas 7 y 8, mientras que sus pipelines estaban en la fila 0, creando aristas diagonales largas que cruzaban el catálogo de BigQuery.
-- **Decisión:** Se implementó `layoutProximityDashboard`:
-  - **Fila 0:** 10 columnas horizontales para la secuencia principal de orquestación (`CONTROL_M` ➔ `SHELL` ➔ `DATASTAGE` ➔ `COMPOSER`...).
+- **Decisión:** El usuario organizó manualmente la topología ideal en capturas compartidas. Se formalizó dicha disposición en el algoritmo `layoutProximityDashboard`:
+  - **Fila 0:** 10 columnas horizontales para la secuencia principal de orquestación (`CONTROL_M` ➔ `SHELL` ➔ `DATASTAGE` ➔ `COMPOSER` ➔ ...).
   - **Fila 1:** Nodos dependientes directos ubicados en la **misma columna** (`x`) de su emisor, logrando aristas 100% verticales de 1 celda (115 px).
+  - **Flujos Secundarios:** Jobs de pipelines adicionales (como `ejemplotabla2`) apilados verticalmente en la columna de su target (`cargar_csv_a_bigquery` en Col 8).
   - **Columnas y Filas Restantes:** Catálogo de 76+ tablas de BigQuery llenando la cuadrícula de forma armónica sin ninguna arista que las cruce.
 - **Impacto:** Eliminación total de cruces de aristas largas, diseño ortogonal limpio y alineación perfecta idéntica a los requerimientos visuales del usuario.
 
@@ -108,3 +115,69 @@ Este documento constituye la **memoria viva del proyecto**. Registra todas las d
   - Agrupa en líneas de máximo 22 a 26 caracteres.
   - Calcula dinámicamente `nodeWidth` (entre 160 y 320 px) y `nodeHeight` según la cantidad de líneas.
 - **Impacto:** Renderizado impecable, tipografía nítida y cero desbordamientos en cualquier resolución.
+
+---
+
+### ADR-009: Telemetría Enriquecida de Incidencias ("Carnita") y Auto-Reapertura de Errores
+
+- **Contexto:** La vista de errores original solo mostraba el nombre del error sin detalles suficientes para diagnosticar si la falla provenía del frontend, backend o base de datos.
+- **Decisión:** Enriquecer el modelo `app_errors_log` con traza técnica completa (`stack_trace`), identificador de componente emisor (`FRONTEND:LineageGraphView`, `BACKEND:storage_service`), severidades (`CRITICAL`, `WARNING`, `INFO`), URL del navegador, user agent y contexto JSON. Además, si un error previamente marcado como `RESOLVED` vuelve a ocurrir, el backend lo reabre automáticamente a `OPEN` e incrementa `occurrence_count`.
+- **Impacto:** Diagnóstico rápido, trazabilidad clara y monitoreo proactivo sin errores desatendidos.
+
+---
+
+### ADR-010: Feedback Visual Inmediato y CRUD Completo de Usuarios Corporativos
+
+- **Contexto:** Al interactuar con la gestión de usuarios, no se proporcionaba indicación visual de que la acción se estaba procesando, y no existía mecanismo para dar de baja definitiva a usuarios obsoletos.
+- **Decisión:** Se implementó en `UserRolesView.tsx` un CRUD integral:
+  - Creación de nuevo usuario corporativo (`@liverpool.com.mx`).
+  - Modificación dinámica de roles con checkboxes multiselección.
+  - Cambio de estado a `INACTIVE` (baja lógica) y reactivación a `ACTIVE`.
+  - Eliminación física definitiva (`DELETE`).
+  - Feedback visual inmediato: botones con spinners de carga en tiempo real y mensajes toast de confirmación.
+  - Blindaje estricto de la cuenta maestra `ADMIN_ROOT` ante cualquier intento de borrado o suspensión.
+- **Impacto:** Operación administrativa completa, intuitiva y a prueba de errores.
+
+---
+
+### ADR-011: Multi-Proyecto GCP Monitoreado y Validación de Conectividad BigQuery
+
+- **Contexto:** La plataforma debe ser capaz de monitorear datasets de BigQuery alojados en múltiples proyectos de Google Cloud Platform de forma configurable.
+- **Decisión:** En el módulo de Configuración se integró el endpoint `/api/gcp/validate` que valida sintácticamente el formato del `project_id`, comprueba la conectividad real con la API de BigQuery en GCP y contabiliza los datasets accesibles, permitiendo expandir la cobertura de la herramienta sin modificar código fuente.
+- **Impacto:** Flexibilidad multi-entorno y validación preventiva de permisos de IAM.
+
+---
+
+### ADR-012: Introspección de Arquitectura Viva con Clasificación por Capas y Módulos Web
+
+- **Contexto:** Los desarrolladores y auditores necesitan conocer en todo momento qué librerías, módulos, endpoints y componentes frontend integran la aplicación en ejecución.
+- **Decisión:** Se desarrolló `code_architecture.py` y `ArchitectureView.tsx`, un módulo de auto-inspección viva que:
+  - Clasifica componentes por lado: Frontend (React) vs Backend (FastAPI).
+  - Categoriza por módulo web del menú: Inicio, Grafo Linaje, Estatus en Vivo, Arquitectura Viva, Bandeja Archivos, Usuarios y Roles, Configuración, Control Costos IA, Gestión Errores.
+  - Detalla tecnologías empleadas, versiones y dependencias clave (`cytoscape`, `sqlglot`, `fastapi`, `pydantic`).
+- **Impacto:** Transparencia técnica total y documentación viva auto-mantenida.
+
+---
+
+### ADR-013: Aislamiento Bidireccional de Subgrafos y Operaciones Atómicas en Batch de Cytoscape
+
+- **Contexto:** Al filtrar por tecnología o buscar un nodo específico, ocultar elementos uno a uno producía parpadeos visuales y layouts desordenados.
+- **Decisión:**
+  - Todas las mutaciones del grafo se realizan dentro de `cy.batch(() => { ... })`.
+  - El buscador soporta 3 modos de linaje: `UPSTREAM` (predecesores/origen), `DOWNSTREAM` (sucesores/destino) y `FULL` (ambos sentidos).
+  - Al aislar un componente, se ocultan estrictamente todos los elementos ajenos y se aplica `relayoutVisibleElements(cy, 'dagre')` para ordenar la cadena de causalidad de izquierda a derecha sin huecos vacíos.
+  - Al pulsar la 'X' para limpiar el buscador, se restaura la vista completa aplicando de nuevo el algoritmo de proximidad.
+- **Impacto:** Rendimiento a 60 FPS, sin flicker y con aislamiento nítido del camino crítico.
+
+---
+
+### ADR-014: Estrategia de Rendimiento y Tuneo: Pre-Cálculo y Persistencia de Linaje en BigQuery
+
+- **Contexto:** Calcular el linaje y ejecutar inferencias semánticas en cada carga de la aplicación causaba latencias elevadas y lentitud percibida.
+- **Decisión:**
+  - La inferencia se ejecuta una sola vez al depositarse el archivo en el bucket.
+  - Los nodos y aristas resultantes se persisten inmediatamente en `lineage_nodes` y `lineage_edges` en BigQuery.
+  - La API de consulta `/api/lineage/graph` lee el grafo ya materializado desde la base de datos con latencia < 80 ms.
+  - El frontend cachea la estructura en memoria y solo aplica transiciones de visualización.
+- **Impacto:** Experiencia ultra-rápida para los usuarios, bajo consumo de recursos en Cloud Run y reducción de consultas redundantes a BigQuery.
+
