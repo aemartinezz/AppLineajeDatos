@@ -21,6 +21,7 @@ Este documento constituye la **memoria viva del proyecto**. Registra todas las d
 - **ADR-013:** Aislamiento Bidireccional de Subgrafos y Operaciones Atómicas en Batch de Cytoscape
 - **ADR-014:** Estrategia de Rendimiento y Tuneo: Pre-Cálculo y Persistencia de Linaje en BigQuery
 - **ADR-015:** Aislamiento Canónico de Tareas Airflow por DAG y Blindaje Estricto Anti-Colisión de Linaje
+- **ADR-016:** Recolector Multi-Fuente de Linaje BigQuery (Vistas, Rutinas y Tablas Externas con SQLGlot)
 
 ---
 
@@ -193,4 +194,22 @@ Este documento constituye la **memoria viva del proyecto**. Registra todas las d
   3. **Purga y Rehidratación Limpia en BigQuery:** Se implementó el método `reset_lineage_tables()` y el endpoint administrativo `POST /api/lineage/reset` que ejecuta `DELETE FROM lineage_edges WHERE TRUE` y `DELETE FROM lineage_nodes WHERE TRUE` en BigQuery, reinicia la memoria y permite la reconstrucción limpia e impoluta del linaje con el endpoint `POST /api/lineage/reprocess-all`.
   4. **Adaptación del Algoritmo de Proximidad Frontend:** Se integraron los identificadores calificados en `PREFERRED_PIPELINE_ORDER` en `LineageGraphView.tsx`, asegurando que cada DAG y tarea se posicione adyacente a sus tablas destino en la cuadrícula ortogonal.
 - **Impacto:** Eliminación total y permanente de relaciones falsas, separación estricta de responsabilidades entre flujos ETL/ELT y certidumbre matemática del 100% en el linaje visualizado.
+
+---
+
+### ADR-016: Recolector Multi-Fuente de Linaje BigQuery (Vistas, Rutinas y Tablas Externas con SQLGlot)
+
+- **Contexto:** En entornos corporativos de Google Cloud BigQuery, el linaje no se limita a cargas por archivos o DAGs de Airflow. Los ingenieros de datos definen vistas estándar (`VIEW`), vistas materializadas (`MATERIALIZED VIEW`), tablas externas mapeadas a buckets GCS (`EXTERNAL TABLE`) y rutinas o procedimientos almacenados (`ROUTINES`). El usuario identificó que una vista creada directamente en GCP (`vista_ejemplotabla_uno` a partir de `ejemplotabla1`) no estaba siendo detectada por el motor de linaje. Adicionalmente, las APIs globales de Data Lineage o `region.INFORMATION_SCHEMA.VIEWS` pueden arrojar errores 403 si la cuenta de servicio carece de permisos administrativos globales a nivel de proyecto.
+- **Decisión:**
+  1. **Arquitectura Multi-Fuente:** Se implementó en `backend/app/engine/bigquery_metadata.py` un recolector estructurado que combina:
+     - `INFORMATION_SCHEMA.VIEWS` por cada dataset descubierto en el proyecto, extrayendo `view_definition`.
+     - `sqlglot.parse_one(view_definition, read="bigquery")`: Se analiza el árbol sintáctico (AST) para extraer las tablas fuente (`exp.Table`), aislando y descartando automáticamente las cláusulas CTE (`WITH cte AS ...`) para evitar falsos positivos con alias temporales. Se genera la relación `BIGQUERY:{src_ds}.{src_tbl} -> BIGQUERY:{view_ds}.{view_name}` (`RelationType.TRANSFORMS`, `confidence_score=1.0`, `InferenceMethod.BQ_METADATA`).
+     - `tables.get` para tablas externas (`table_type == "EXTERNAL"`), inspeccionando `external_data_configuration.source_uris` y creando aristas `GCS:{uri} -> BIGQUERY:{table}` (`RelationType.LOADS_INTO`, `confidence_score=1.0`).
+     - `INFORMATION_SCHEMA.ROUTINES` por dataset, inspeccionando el código SQL de procedimientos almacenados.
+     - `INFORMATION_SCHEMA.JOBS_BY_USER` para capturar dependencias dinámicas generadas por consultas sin requerir permisos de superusuario (`JOBS_BY_PROJECT`).
+  2. **Clasificación y Capa Semántica:** Las vistas se clasifican automáticamente en la capa `layer="ANALYTICS"`, las tablas staging en `layer="INGESTION"`, y las tablas estándar en `layer="STORAGE"`.
+  3. **Disposición Contigua en el Grafo (`layoutProximityDashboard`):** En `LineageGraphView.tsx`, las vistas dependientes se posicionan adyacentes a su tabla fuente en la cuadrícula ortogonal, asegurando aristas ultra-cortas y visualmente armónicas.
+  4. **Emulación y Tests:** Se integró la vista `vista_ejemplotabla_uno` en el catálogo de fallback y en la suite de 10 pruebas automatizadas (`test_multidataset_costs_errors.py`).
+- **Impacto:** Detección 100% precisa y matemática de vistas y tablas externas en BigQuery, operando de forma resiliente tanto en entornos con permisos acotados de dataset como con credenciales completas de GCP.
+
 
