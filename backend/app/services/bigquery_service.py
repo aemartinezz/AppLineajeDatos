@@ -2,6 +2,8 @@ import os
 import json
 import logging
 import time
+import hashlib
+import uuid
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 from google.cloud import bigquery
@@ -10,7 +12,8 @@ from google.api_core.exceptions import GoogleAPIError
 from app.config import settings, current_app_config
 from app.models.schemas import (
     LineageNode, LineageEdge, LineageGraph, ExecutionStatus,
-    AppConfig, ModelConfig, StorageConfig, ToolType, RelationType, InferenceMethod
+    AppConfig, ModelConfig, StorageConfig, ToolType, RelationType, InferenceMethod,
+    ModelUsageLog, ModelCostSummary, AppError
 )
 from app.engine.bigquery_metadata import BigQueryMetadataExtractor
 from app.engine.lineage_linker import LineageLinker
@@ -24,6 +27,9 @@ class BigQueryService:
     - lineage_edges
     - execution_status_daily
     - app_configurations
+    - app_users_roles
+    - app_model_usage_logs
+    - app_errors_log
     Soporta sincronización bidireccional entre BigQuery en GCP y caché local en memoria.
     """
 
@@ -31,6 +37,8 @@ class BigQueryService:
         self.nodes_store: Dict[str, LineageNode] = {}
         self.edges_store: Dict[str, LineageEdge] = {}
         self.status_store: Dict[str, Dict[str, Any]] = {}
+        self.model_usage_store: List[ModelUsageLog] = []
+        self.errors_store: Dict[str, AppError] = {}
         self.cached_config: AppConfig = current_app_config
         self._cached_graph: Optional[LineageGraph] = None
         self._cached_graph_time: float = 0.0
@@ -206,7 +214,11 @@ class BigQueryService:
         now = time.time()
         if self._cached_graph is None or (now - self._cached_graph_time > self._cache_ttl_seconds):
             # 1. Obtener linaje nativo de BigQuery
-            bq_data = BigQueryMetadataExtractor.get_native_lineage(settings.GCP_PROJECT_ID, settings.BQ_DATASET)
+            bq_data = BigQueryMetadataExtractor.get_native_lineage(
+                project_id=settings.GCP_PROJECT_ID,
+                dataset_id=settings.BQ_DATASET,
+                bq_client=self.bq_client
+            )
 
             # 2. Fusionar con LineageLinker
             self._cached_graph = LineageLinker.fuse_graph(
@@ -425,4 +437,351 @@ class BigQueryService:
             "status": "ACTIVE"
         }
 
+    # -------------------------------------------------------------
+    # CONTROL DE GASTOS Y AUDITORÍA DE MODELOS IA (BIGQUERY)
+    # -------------------------------------------------------------
+
+    def log_model_usage(
+        self,
+        model_name: str,
+        input_tokens: int,
+        output_tokens: int,
+        cost_usd: Optional[float] = None,
+        source_file: Optional[str] = None,
+        confidence_score: Optional[float] = None,
+        status: str = "SUCCESS"
+    ) -> ModelUsageLog:
+        """Registra el consumo de tokens y costo de inferencia en BigQuery."""
+        if cost_usd is None:
+            # Tarifas por millón de tokens
+            if "pro" in model_name.lower():
+                cost_usd = (input_tokens / 1_000_000.0 * 1.25) + (output_tokens / 1_000_000.0 * 5.00)
+            else:
+                cost_usd = (input_tokens / 1_000_000.0 * 0.01875) + (output_tokens / 1_000_000.0 * 0.075)
+
+        usage = ModelUsageLog(
+            id=str(uuid.uuid4()),
+            timestamp=datetime.utcnow(),
+            model_name=model_name,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cost_usd=round(cost_usd, 6),
+            source_file=source_file,
+            confidence_score=confidence_score,
+            status=status
+        )
+        self.model_usage_store.append(usage)
+
+        if self.bq_client:
+            try:
+                table_ref = f"{settings.GCP_PROJECT_ID}.{settings.BQ_DATASET}.app_model_usage_logs"
+                rows = [{
+                    "id": usage.id,
+                    "timestamp": usage.timestamp.isoformat(),
+                    "model_name": usage.model_name,
+                    "input_tokens": usage.input_tokens,
+                    "output_tokens": usage.output_tokens,
+                    "cost_usd": usage.cost_usd,
+                    "source_file": usage.source_file or "",
+                    "confidence_score": usage.confidence_score or 1.0,
+                    "status": usage.status
+                }]
+                self.bq_client.insert_rows_json(table_ref, rows)
+            except Exception as e:
+                logger.warning(f"No se pudo registrar log de modelo en BigQuery: {e}")
+
+        return usage
+
+    def get_model_costs_summary(self) -> ModelCostSummary:
+        """Obtiene el acumulado de tokens y costes agrupado por modelo."""
+        # Si no hay datos en memoria local, sembrar datos de demo realistas
+        if not self.model_usage_store and not self.bq_client:
+            self.model_usage_store = [
+                ModelUsageLog(id="demo-1", timestamp=datetime.utcnow(), model_name="gemini-1.5-flash", input_tokens=14200, output_tokens=3200, cost_usd=0.000506, source_file="extract_oracle.sh", confidence_score=0.92, status="SUCCESS"),
+                ModelUsageLog(id="demo-2", timestamp=datetime.utcnow(), model_name="gemini-1.5-flash", input_tokens=22100, output_tokens=4100, cost_usd=0.000722, source_file="clean_staging_logs.sh", confidence_score=0.75, status="SUCCESS"),
+                ModelUsageLog(id="demo-3", timestamp=datetime.utcnow(), model_name="gemini-1.5-pro", input_tokens=48500, output_tokens=8900, cost_usd=0.105125, source_file="DS_ENRICH_CLIENTES.dsx", confidence_score=0.60, status="SUCCESS"),
+                ModelUsageLog(id="demo-4", timestamp=datetime.utcnow(), model_name="gemini-1.5-flash", input_tokens=9800, output_tokens=1950, cost_usd=0.000330, source_file="dag_ventas_analytics.py", confidence_score=0.95, status="SUCCESS"),
+            ]
+
+        if self.bq_client:
+            try:
+                table_ref = f"{settings.GCP_PROJECT_ID}.{settings.BQ_DATASET}.app_model_usage_logs"
+                q = f"""
+                SELECT 
+                    model_name,
+                    SUM(COALESCE(input_tokens, 0)) as total_input,
+                    SUM(COALESCE(output_tokens, 0)) as total_output,
+                    SUM(COALESCE(cost_usd, 0.0)) as total_cost,
+                    COUNT(1) as calls
+                FROM `{table_ref}`
+                GROUP BY model_name
+                """
+                job = self.bq_client.query(q)
+                rows = list(job.result())
+                if rows:
+                    tot_cost = 0.0
+                    tot_in = 0
+                    tot_out = 0
+                    tot_calls = 0
+                    cost_by_m = {}
+                    tok_by_m = {}
+                    for r in rows:
+                        tot_cost += r.total_cost
+                        tot_in += r.total_input
+                        tot_out += r.total_output
+                        tot_calls += r.calls
+                        cost_by_m[r.model_name] = round(r.total_cost, 6)
+                        tok_by_m[r.model_name] = r.total_input + r.total_output
+
+                    pct = (tot_cost / 50.0) * 100.0
+                    return ModelCostSummary(
+                        total_cost_usd=round(tot_cost, 6),
+                        total_input_tokens=tot_in,
+                        total_output_tokens=tot_out,
+                        total_calls=tot_calls,
+                        budget_limit_usd=50.0,
+                        budget_consumed_percentage=round(pct, 2),
+                        alert_triggered=pct >= 80.0,
+                        cost_by_model=cost_by_m,
+                        tokens_by_model=tok_by_m,
+                        last_updated=datetime.utcnow()
+                    )
+            except Exception as e:
+                logger.warning(f"No se pudo consultar app_model_usage_logs en BigQuery: {e}")
+
+        # Agregación en memoria local
+        tot_cost = sum(u.cost_usd for u in self.model_usage_store)
+        tot_in = sum(u.input_tokens for u in self.model_usage_store)
+        tot_out = sum(u.output_tokens for u in self.model_usage_store)
+        cost_by_m: Dict[str, float] = {}
+        tok_by_m: Dict[str, int] = {}
+        for u in self.model_usage_store:
+            cost_by_m[u.model_name] = round(cost_by_m.get(u.model_name, 0.0) + u.cost_usd, 6)
+            tok_by_m[u.model_name] = tok_by_m.get(u.model_name, 0) + u.input_tokens + u.output_tokens
+
+        pct = (tot_cost / 50.0) * 100.0
+        return ModelCostSummary(
+            total_cost_usd=round(tot_cost, 6),
+            total_input_tokens=tot_in,
+            total_output_tokens=tot_out,
+            total_calls=len(self.model_usage_store),
+            budget_limit_usd=50.0,
+            budget_consumed_percentage=round(pct, 2),
+            alert_triggered=pct >= 80.0,
+            cost_by_model=cost_by_m,
+            tokens_by_model=tok_by_m,
+            last_updated=datetime.utcnow()
+        )
+
+    # -------------------------------------------------------------
+    # GESTIÓN Y SEGUIMIENTO DE ERRORES (BIGQUERY + AUTO-REAPERTURA)
+    # -------------------------------------------------------------
+
+    def log_error(
+        self,
+        error_type: str,
+        message: str,
+        stack_trace: Optional[str] = None,
+        component: str = "BACKEND",
+        severity: str = "WARNING"
+    ) -> AppError:
+        """
+        Registra un error agrupado por hash.
+        Si ya existía en estado RESOLVED y vuelve a ocurrir, se REABRE automáticamente a OPEN.
+        """
+        norm_msg = message[:120].strip()
+        err_hash = hashlib.sha256(f"{error_type}:{component}:{norm_msg}".encode("utf-8")).hexdigest()[:12]
+        error_id = f"ERR-{err_hash.upper()}"
+        now = datetime.utcnow()
+
+        if self.bq_client:
+            try:
+                table_ref = f"{settings.GCP_PROJECT_ID}.{settings.BQ_DATASET}.app_errors_log"
+                merge_q = f"""
+                MERGE `{table_ref}` T
+                USING (
+                    SELECT 
+                        @error_id as error_id,
+                        @error_type as error_type,
+                        @message as message,
+                        @stack_trace as stack_trace,
+                        @component as component,
+                        @severity as severity
+                ) S
+                ON T.error_id = S.error_id
+                WHEN MATCHED THEN
+                  UPDATE SET 
+                    occurrence_count = T.occurrence_count + 1,
+                    last_seen = CURRENT_TIMESTAMP(),
+                    status = 'OPEN',
+                    resolved_at = NULL,
+                    resolved_by = NULL,
+                    stack_trace = COALESCE(S.stack_trace, T.stack_trace),
+                    severity = S.severity
+                WHEN NOT MATCHED THEN
+                  INSERT (
+                    error_id, error_type, message, stack_trace, component, severity,
+                    occurrence_count, first_seen, last_seen, status, resolved_at, resolved_by
+                  )
+                  VALUES (
+                    S.error_id, S.error_type, S.message, S.stack_trace, S.component, S.severity,
+                    1, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP(), 'OPEN', NULL, NULL
+                  )
+                """
+                job_cfg = bigquery.QueryJobConfig(
+                    query_parameters=[
+                        bigquery.ScalarQueryParameter("error_id", "STRING", error_id),
+                        bigquery.ScalarQueryParameter("error_type", "STRING", error_type),
+                        bigquery.ScalarQueryParameter("message", "STRING", message),
+                        bigquery.ScalarQueryParameter("stack_trace", "STRING", stack_trace or ""),
+                        bigquery.ScalarQueryParameter("component", "STRING", component),
+                        bigquery.ScalarQueryParameter("severity", "STRING", severity),
+                    ]
+                )
+                self.bq_client.query(merge_q, job_config=job_cfg).result()
+            except Exception as e:
+                logger.warning(f"No se pudo registrar error en BigQuery app_errors_log: {e}")
+
+        # Actualización en memoria local (con auto-reapertura)
+        if error_id in self.errors_store:
+            existing = self.errors_store[error_id]
+            existing.occurrence_count += 1
+            existing.last_seen = now
+            existing.status = "OPEN"  # Auto-reabrir si vuelve a ocurrir
+            existing.resolved_at = None
+            existing.resolved_by = None
+            if stack_trace:
+                existing.stack_trace = stack_trace
+            existing.severity = severity
+            return existing
+        else:
+            new_err = AppError(
+                error_id=error_id,
+                error_type=error_type,
+                message=message,
+                stack_trace=stack_trace,
+                component=component,
+                severity=severity,
+                occurrence_count=1,
+                first_seen=now,
+                last_seen=now,
+                status="OPEN"
+            )
+            self.errors_store[error_id] = new_err
+            return new_err
+
+    def list_errors(self, status: Optional[str] = None) -> List[AppError]:
+        """Obtiene la lista de incidencias técnicas ordenadas por última detección."""
+        if not self.errors_store and not self.bq_client:
+            # Sembrar incidencias de demostración iniciales
+            self.errors_store = {
+                "ERR-B10A92C1D4": AppError(
+                    error_id="ERR-B10A92C1D4",
+                    error_type="GCSBucketTimeoutException",
+                    message="gs://datosdeentrada connection timeout after 10000ms",
+                    stack_trace="Traceback (most recent call last):\n  File 'watcher.py', line 45, in check_bucket\n  TimeoutError: Socket read timeout",
+                    component="GCS_WATCHER",
+                    severity="WARNING",
+                    occurrence_count=3,
+                    first_seen=datetime.utcnow(),
+                    last_seen=datetime.utcnow(),
+                    status="OPEN"
+                ),
+                "ERR-C4D89E71F2": AppError(
+                    error_id="ERR-C4D89E71F2",
+                    error_type="BigQueryJobSyntaxWarning",
+                    message="Dataset ti_data_driven contains unindexed partition scan",
+                    stack_trace="Warning: BigQuery scan exceeded 150MB on unpartitioned table",
+                    component="BIGQUERY_ENGINE",
+                    severity="INFO",
+                    occurrence_count=12,
+                    first_seen=datetime.utcnow(),
+                    last_seen=datetime.utcnow(),
+                    status="RESOLVED",
+                    resolved_at=datetime.utcnow(),
+                    resolved_by="aemartinezz@liverpool.com.mx"
+                )
+            }
+
+        if self.bq_client:
+            try:
+                table_ref = f"{settings.GCP_PROJECT_ID}.{settings.BQ_DATASET}.app_errors_log"
+                where_clause = f"WHERE status = '{status}'" if status else ""
+                q = f"""
+                SELECT 
+                    error_id, error_type, message, stack_trace, component, severity,
+                    occurrence_count, first_seen, last_seen, status, resolved_at, resolved_by
+                FROM `{table_ref}`
+                {where_clause}
+                ORDER BY last_seen DESC
+                LIMIT 100
+                """
+                job = self.bq_client.query(q)
+                errs = []
+                for r in job.result():
+                    errs.append(AppError(
+                        error_id=r.error_id,
+                        error_type=r.error_type,
+                        message=r.message,
+                        stack_trace=r.stack_trace,
+                        component=r.component,
+                        severity=r.severity,
+                        occurrence_count=r.occurrence_count,
+                        first_seen=r.first_seen if r.first_seen else datetime.utcnow(),
+                        last_seen=r.last_seen if r.last_seen else datetime.utcnow(),
+                        status=r.status,
+                        resolved_at=r.resolved_at,
+                        resolved_by=r.resolved_by
+                    ))
+                return errs
+            except Exception as e:
+                logger.warning(f"No se pudo consultar app_errors_log en BigQuery: {e}")
+
+        all_errs = list(self.errors_store.values())
+        if status:
+            return [e for e in all_errs if e.status == status]
+        return sorted(all_errs, key=lambda x: x.last_seen, reverse=True)
+
+    def resolve_error(self, error_id: str, resolved_by: str = "admin") -> AppError:
+        """Marca una incidencia técnica como SOLUCIONADO."""
+        now = datetime.utcnow()
+
+        if self.bq_client:
+            try:
+                table_ref = f"{settings.GCP_PROJECT_ID}.{settings.BQ_DATASET}.app_errors_log"
+                q = f"""
+                UPDATE `{table_ref}`
+                SET status = 'RESOLVED', resolved_at = CURRENT_TIMESTAMP(), resolved_by = @resolved_by
+                WHERE error_id = @error_id
+                """
+                job_cfg = bigquery.QueryJobConfig(
+                    query_parameters=[
+                        bigquery.ScalarQueryParameter("resolved_by", "STRING", resolved_by),
+                        bigquery.ScalarQueryParameter("error_id", "STRING", error_id),
+                    ]
+                )
+                self.bq_client.query(q, job_config=job_cfg).result()
+            except Exception as e:
+                logger.warning(f"No se pudo actualizar estado a RESOLVED en BigQuery: {e}")
+
+        if error_id in self.errors_store:
+            err = self.errors_store[error_id]
+            err.status = "RESOLVED"
+            err.resolved_at = now
+            err.resolved_by = resolved_by
+            return err
+
+        # Si no existía en memoria pero se resolvió
+        dummy_err = AppError(
+            error_id=error_id,
+            error_type="GenericError",
+            message="Error resuelto",
+            status="RESOLVED",
+            resolved_at=now,
+            resolved_by=resolved_by
+        )
+        self.errors_store[error_id] = dummy_err
+        return dummy_err
+
 bigquery_service = BigQueryService()
+

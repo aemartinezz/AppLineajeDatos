@@ -1,11 +1,16 @@
 import asyncio
+import traceback
 from datetime import datetime
-from fastapi import FastAPI, UploadFile, File, Form, WebSocket, WebSocketDisconnect, HTTPException, Header
+from fastapi import FastAPI, UploadFile, File, Form, WebSocket, WebSocketDisconnect, HTTPException, Header, Request, status
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Dict, Any, Optional
 
 from app.config import settings, current_app_config
-from app.models.schemas import LineageGraph, PipelineResult, AppConfig, ExecutionStatus, LoginRequest, UserUpsertRequest
+from app.models.schemas import (
+    LineageGraph, PipelineResult, AppConfig, ExecutionStatus, LoginRequest, UserUpsertRequest,
+    ModelCostSummary, AppError, ErrorResolveRequest, ErrorReportRequest
+)
 from app.services.bigquery_service import bigquery_service
 from app.services.storage_service import storage_service
 from app.services.init_db import init_bigquery_tables
@@ -16,6 +21,28 @@ app = FastAPI(
     description="API de Backend para correlación de linaje multi-herramienta en GCP con telemetría en tiempo real",
     version="1.0.0"
 )
+
+# Middleware global para interceptar y registrar automáticamente cualquier fallo en app_errors_log
+@app.middleware("http")
+async def errors_logging_middleware(request: Request, call_next):
+    try:
+        return await call_next(request)
+    except Exception as exc:
+        trace = traceback.format_exc()
+        try:
+            bigquery_service.log_error(
+                error_type=exc.__class__.__name__,
+                message=str(exc) or "Internal Server Error",
+                stack_trace=trace,
+                component=f"API:{request.method}:{request.url.path}",
+                severity="CRITICAL"
+            )
+        except Exception:
+            pass
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"detail": "Error interno del servidor registrado automáticamente en la consola de incidencias."}
+        )
 
 # Tarea asíncrona permanente para detectar y procesar archivos entrantes en gs://datosdeentrada
 async def gcs_inbox_background_watcher():
@@ -329,6 +356,52 @@ def validate_gcp_environment():
     }
 
 # -------------------------------------------------------------
+# CONTROL DE GASTOS Y AUDITORÍA DE MODELOS IA (ADMIN / DEVELOPER)
+# -------------------------------------------------------------
+
+@app.get("/api/costs/summary", response_model=ModelCostSummary)
+def get_costs_summary():
+    """
+    Retorna métricas consolidadas de consumo de tokens y presupuesto estimado en USD.
+    Información persistida en BigQuery app_model_usage_logs.
+    """
+    return bigquery_service.get_model_costs_summary()
+
+# -------------------------------------------------------------
+# GESTIÓN Y SEGUIMIENTO DE ERRORES EN VIVO (DEVELOPER / ADMIN)
+# -------------------------------------------------------------
+
+@app.get("/api/errors", response_model=List[AppError])
+def list_errors(status: Optional[str] = None):
+    """
+    Lista las incidencias y fallos agrupados por hash técnico desde BigQuery app_errors_log.
+    Permite filtrar por status ('OPEN' o 'RESOLVED').
+    """
+    return bigquery_service.list_errors(status=status)
+
+@app.post("/api/errors/report", response_model=AppError)
+def report_error(req: ErrorReportRequest):
+    """
+    Registra un error reportado desde el cliente frontend o módulos auxiliares.
+    Si ya existía en estado RESOLVED y vuelve a ocurrir, se auto-reabre a OPEN.
+    """
+    return bigquery_service.log_error(
+        error_type=req.error_type,
+        message=req.message,
+        stack_trace=req.stack_trace,
+        component=req.component,
+        severity=req.severity
+    )
+
+@app.post("/api/errors/{error_id}/resolve", response_model=AppError)
+def resolve_error_endpoint(error_id: str, req: ErrorResolveRequest):
+    """
+    Marca una incidencia técnica como SOLUCIONADO en BigQuery.
+    Si la incidencia reaparece en el futuro, el motor la reabrirá automáticamente a OPEN.
+    """
+    return bigquery_service.resolve_error(error_id=error_id, resolved_by=req.resolved_by or "admin")
+
+# -------------------------------------------------------------
 # DOCUMENTACIÓN VIVA DE CÓDIGO Y ARQUITECTURA
 # -------------------------------------------------------------
 
@@ -343,3 +416,5 @@ def get_architecture_graph():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("app.main:app", host=settings.HOST, port=settings.PORT, reload=True)
+
+

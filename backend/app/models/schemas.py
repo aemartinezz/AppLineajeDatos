@@ -111,3 +111,51 @@ class UserUpsertRequest(BaseModel):
     roles: List[str]
     status: str = "ACTIVE"
 
+class ModelUsageLog(BaseModel):
+    id: str
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    model_name: str
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd: float = 0.0
+    source_file: Optional[str] = None
+    confidence_score: Optional[float] = None
+    status: str = "SUCCESS"
+
+class ModelCostSummary(BaseModel):
+    total_cost_usd: float = 0.0
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    total_calls: int = 0
+    budget_limit_usd: float = 50.0  # Umbral mensual configurable
+    budget_consumed_percentage: float = 0.0
+    alert_triggered: bool = False
+    cost_by_model: Dict[str, float] = Field(default_factory=dict)
+    tokens_by_model: Dict[str, int] = Field(default_factory=dict)
+    last_updated: datetime = Field(default_factory=datetime.utcnow)
+
+class AppError(BaseModel):
+    error_id: str
+    error_type: str
+    message: str
+    stack_trace: Optional[str] = None
+    component: str = "BACKEND"
+    severity: str = "WARNING"  # CRITICAL, WARNING, INFO
+    occurrence_count: int = 1
+    first_seen: datetime = Field(default_factory=datetime.utcnow)
+    last_seen: datetime = Field(default_factory=datetime.utcnow)
+    status: str = "OPEN"  # OPEN, RESOLVED
+    resolved_at: Optional[datetime] = None
+    resolved_by: Optional[str] = None
+
+class ErrorResolveRequest(BaseModel):
+    resolved_by: Optional[str] = "admin"
+
+class ErrorReportRequest(BaseModel):
+    error_type: str
+    message: str
+    stack_trace: Optional[str] = None
+    component: str = "FRONTEND"
+    severity: str = "WARNING"
+
+

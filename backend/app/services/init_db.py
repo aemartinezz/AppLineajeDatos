@@ -79,9 +79,50 @@ OPTIONS(
 );
 """
 
+DDL_APP_MODEL_USAGE_LOGS = """
+CREATE TABLE IF NOT EXISTS `{project}.{dataset}.app_model_usage_logs` (
+    id STRING NOT NULL OPTIONS(description="Identificador único del registro de uso de IA"),
+    timestamp TIMESTAMP NOT NULL OPTIONS(description="Fecha y hora de invocación"),
+    model_name STRING NOT NULL OPTIONS(description="Modelo invocado (gemini-1.5-flash o gemini-1.5-pro)"),
+    input_tokens INT64 OPTIONS(description="Tokens de entrada procesados"),
+    output_tokens INT64 OPTIONS(description="Tokens generados en la respuesta"),
+    cost_usd FLOAT64 NOT NULL OPTIONS(description="Costo estimado en dólares estadounidenses"),
+    source_file STRING OPTIONS(description="Archivo analizado"),
+    confidence_score FLOAT64 OPTIONS(description="Score de certeza obtenido"),
+    status STRING OPTIONS(description="SUCCESS, FAILED")
+)
+PARTITION BY DATE(timestamp)
+CLUSTER BY model_name, status
+OPTIONS(
+    description="Auditoría y control de consumo de tokens y costes de modelos de IA"
+);
+"""
+
+DDL_APP_ERRORS_LOG = """
+CREATE TABLE IF NOT EXISTS `{project}.{dataset}.app_errors_log` (
+    error_id STRING NOT NULL OPTIONS(description="Firma única del error agrupado"),
+    error_type STRING NOT NULL OPTIONS(description="Clase o tipo de excepción"),
+    message STRING NOT NULL OPTIONS(description="Mensaje descriptivo del error"),
+    stack_trace STRING OPTIONS(description="Traza técnica completa de ejecución"),
+    component STRING NOT NULL OPTIONS(description="Módulo emisor del error"),
+    severity STRING NOT NULL OPTIONS(description="CRITICAL, WARNING, INFO"),
+    occurrence_count INT64 NOT NULL OPTIONS(description="Número de veces que ha ocurrido"),
+    first_seen TIMESTAMP NOT NULL OPTIONS(description="Primera detección"),
+    last_seen TIMESTAMP NOT NULL OPTIONS(description="Última detección"),
+    status STRING NOT NULL OPTIONS(description="OPEN, RESOLVED"),
+    resolved_at TIMESTAMP OPTIONS(description="Fecha en que se marcó como solucionado"),
+    resolved_by STRING OPTIONS(description="Usuario que resolvió la incidencia")
+)
+PARTITION BY DATE(last_seen)
+CLUSTER BY status, severity
+OPTIONS(
+    description="Registro agrupado y gestión del ciclo de vida de errores de la plataforma"
+);
+"""
+
 def init_bigquery_tables(project_id: str = None, dataset_id: str = None) -> dict:
     """
-    Crea las 5 tablas principales en BigQuery si no existen e inicializa configuración y usuarios base.
+    Crea las 7 tablas principales en BigQuery si no existen e inicializa configuración y usuarios base.
     """
     proj = project_id or settings.GCP_PROJECT_ID
     ds = dataset_id or settings.BQ_DATASET
@@ -108,6 +149,8 @@ def init_bigquery_tables(project_id: str = None, dataset_id: str = None) -> dict
             "execution_status_daily": DDL_EXECUTION_STATUS_DAILY.format(project=proj, dataset=ds),
             "app_configurations": DDL_APP_CONFIGURATIONS.format(project=proj, dataset=ds),
             "app_users_roles": DDL_APP_USERS_ROLES.format(project=proj, dataset=ds),
+            "app_model_usage_logs": DDL_APP_MODEL_USAGE_LOGS.format(project=proj, dataset=ds),
+            "app_errors_log": DDL_APP_ERRORS_LOG.format(project=proj, dataset=ds),
         }
         
         for table_name, ddl_query in ddls.items():

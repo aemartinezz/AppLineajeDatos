@@ -17,6 +17,11 @@ interface ArchNode {
   label: string;
   category: string;
   layer: string;
+  side?: string;
+  module_tag?: string;
+  technology?: string;
+  key_libraries?: string[];
+  key_functions?: string[];
   file_path: string;
   description: string;
   guide_to_modify: string;
@@ -43,6 +48,8 @@ export const ArchitectureDocsView: React.FC<ArchitectureDocsViewProps> = ({ user
   const [graphData, setGraphData] = useState<{ nodes: ArchNode[]; edges: ArchEdge[]; metadata: any } | null>(null);
   const [selectedNode, setSelectedNode] = useState<ArchNode | null>(null);
   const [activeCategory, setActiveCategory] = useState<string>('ALL');
+  const [sideFilter, setSideFilter] = useState<'ALL' | 'FRONTEND' | 'BACKEND'>('ALL');
+  const [moduleFilter, setModuleFilter] = useState<string>('ALL');
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(true);
 
@@ -54,7 +61,7 @@ export const ArchitectureDocsView: React.FC<ArchitectureDocsViewProps> = ({ user
       const res = await fetch('/api/architecture/graph');
       const data = await res.json();
       setGraphData(data);
-      renderCytoscape(data.nodes, data.edges, activeCategory);
+      renderCytoscape(data.nodes, data.edges, activeCategory, sideFilter, moduleFilter);
     } catch (err) {
       console.error("Error al cargar grafo de arquitectura:", err);
     } finally {
@@ -62,12 +69,30 @@ export const ArchitectureDocsView: React.FC<ArchitectureDocsViewProps> = ({ user
     }
   };
 
-  const renderCytoscape = (nodes: ArchNode[], edges: ArchEdge[], categoryFilter: string) => {
+  const renderCytoscape = (
+    nodes: ArchNode[],
+    edges: ArchEdge[],
+    categoryFilter: string,
+    side: 'ALL' | 'FRONTEND' | 'BACKEND',
+    moduleTag: string
+  ) => {
     if (!containerRef.current) return;
 
     let filteredNodes = nodes;
+
+    // Filtro por categoría
     if (categoryFilter !== 'ALL') {
-      filteredNodes = nodes.filter(n => n.category === categoryFilter);
+      filteredNodes = filteredNodes.filter(n => n.category === categoryFilter);
+    }
+
+    // Filtro por Lado (Solo Frontend vs Solo Backend)
+    if (side !== 'ALL') {
+      filteredNodes = filteredNodes.filter(n => (n.side || 'BACKEND') === side);
+    }
+
+    // Filtro por Módulo Web
+    if (moduleTag !== 'ALL') {
+      filteredNodes = filteredNodes.filter(n => n.module_tag === moduleTag || n.module_tag === 'GLOBAL');
     }
 
     const nodeIds = new Set(filteredNodes.map(n => n.id));
@@ -181,7 +206,21 @@ export const ArchitectureDocsView: React.FC<ArchitectureDocsViewProps> = ({ user
   const handleCategoryChange = (cat: string) => {
     setActiveCategory(cat);
     if (graphData) {
-      renderCytoscape(graphData.nodes, graphData.edges, cat);
+      renderCytoscape(graphData.nodes, graphData.edges, cat, sideFilter, moduleFilter);
+    }
+  };
+
+  const handleSideChange = (side: 'ALL' | 'FRONTEND' | 'BACKEND') => {
+    setSideFilter(side);
+    if (graphData) {
+      renderCytoscape(graphData.nodes, graphData.edges, activeCategory, side, moduleFilter);
+    }
+  };
+
+  const handleModuleChange = (mod: string) => {
+    setModuleFilter(mod);
+    if (graphData) {
+      renderCytoscape(graphData.nodes, graphData.edges, activeCategory, sideFilter, mod);
     }
   };
 
@@ -199,7 +238,8 @@ export const ArchitectureDocsView: React.FC<ArchitectureDocsViewProps> = ({ user
     const matchedNodes = cy.nodes().filter((ele) => {
       const raw = ele.data('nodeRaw') as ArchNode;
       return raw.label.toLowerCase().includes(term.toLowerCase()) || 
-             raw.file_path.toLowerCase().includes(term.toLowerCase());
+             raw.file_path.toLowerCase().includes(term.toLowerCase()) ||
+             (raw.technology && raw.technology.toLowerCase().includes(term.toLowerCase()));
     });
 
     if (matchedNodes.length > 0) {
@@ -251,7 +291,7 @@ export const ArchitectureDocsView: React.FC<ArchitectureDocsViewProps> = ({ user
         border: '1px solid #E2E8F0',
         display: 'flex',
         alignItems: 'center',
-        gap: '16px',
+        gap: '14px',
         flexWrap: 'wrap'
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -266,15 +306,70 @@ export const ArchitectureDocsView: React.FC<ArchitectureDocsViewProps> = ({ user
           )}
         </div>
 
-        {/* Filtros por Capa */}
-        <div style={{ display: 'flex', gap: '6px' }}>
+        {/* 1. Filtros por Lado: Frontend / Backend */}
+        <div style={{ display: 'flex', gap: '4px', backgroundColor: '#F1F5F9', padding: '3px', borderRadius: '6px' }}>
           {[
             { key: 'ALL', label: 'Todo' },
-            { key: 'FRONTEND_VIEW', label: 'Vistas React' },
-            { key: 'API_ROUTE', label: 'Endpoints API' },
+            { key: 'FRONTEND', label: 'Frontend' },
+            { key: 'BACKEND', label: 'Backend' },
+          ].map(side => (
+            <button
+              key={side.key}
+              onClick={() => handleSideChange(side.key as any)}
+              style={{
+                fontSize: '11px',
+                fontWeight: sideFilter === side.key ? 700 : 500,
+                padding: '3px 9px',
+                borderRadius: '4px',
+                border: 'none',
+                backgroundColor: sideFilter === side.key ? '#FFFFFF' : 'transparent',
+                color: sideFilter === side.key ? '#731853' : '#64748B',
+                boxShadow: sideFilter === side.key ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                cursor: 'pointer'
+              }}
+            >
+              {side.label}
+            </button>
+          ))}
+        </div>
+
+        {/* 2. Selector de Módulo Web */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <span style={{ fontSize: '11px', fontWeight: 600, color: '#64748B' }}>Módulo:</span>
+          <select
+            value={moduleFilter}
+            onChange={(e) => handleModuleChange(e.target.value)}
+            style={{
+              padding: '4px 8px',
+              fontSize: '11px',
+              borderRadius: '6px',
+              border: '1px solid #CBD5E1',
+              backgroundColor: '#FFFFFF',
+              color: '#334155',
+              cursor: 'pointer'
+            }}
+          >
+            <option value="ALL">Todos los Módulos</option>
+            <option value="INICIO">Inicio (Dashboard)</option>
+            <option value="GRAFO_LINEAJE">Grafo Linaje</option>
+            <option value="ESTATUS_EN_VIVO">Estatus en Vivo</option>
+            <option value="GESTION_ERRORES">Gestión de Errores</option>
+            <option value="INBOX">Bandeja de Entrada</option>
+            <option value="CONFIGURACION">Configuración & Gastos</option>
+            <option value="VALIDACION_GCP">Validación GCP</option>
+            <option value="ARQUITECTURA_VIVA">Arquitectura Viva</option>
+          </select>
+        </div>
+
+        {/* 3. Filtros por Tipo de Componente */}
+        <div style={{ display: 'flex', gap: '4px' }}>
+          {[
+            { key: 'ALL', label: 'Capas' },
+            { key: 'FRONTEND_VIEW', label: 'Vistas' },
+            { key: 'API_ROUTE', label: 'APIs' },
             { key: 'SERVICE', label: 'Servicios' },
             { key: 'ENGINE', label: 'Motores IA' },
-            { key: 'GCP_RESOURCE', label: 'GCP Cloud' },
+            { key: 'GCP_RESOURCE', label: 'GCP' },
           ].map(tab => (
             <button
               key={tab.key}
@@ -282,7 +377,7 @@ export const ArchitectureDocsView: React.FC<ArchitectureDocsViewProps> = ({ user
               style={{
                 fontSize: '11px',
                 fontWeight: 600,
-                padding: '4px 10px',
+                padding: '3px 8px',
                 borderRadius: '6px',
                 border: activeCategory === tab.key ? '1px solid #731853' : '1px solid #E2E8F0',
                 backgroundColor: activeCategory === tab.key ? '#FAF0F5' : '#FFFFFF',
@@ -304,17 +399,17 @@ export const ArchitectureDocsView: React.FC<ArchitectureDocsViewProps> = ({ user
             value={searchTerm}
             onChange={(e) => handleSearch(e.target.value)}
             style={{
-              padding: '5px 10px 5px 28px',
-              fontSize: '12px',
+              padding: '4px 8px 4px 26px',
+              fontSize: '11px',
               borderRadius: '6px',
               border: '1px solid #CBD5E1',
-              width: '200px'
+              width: '180px'
             }}
           />
         </div>
 
         {/* Botones de Navegación y Centrado */}
-        <div style={{ display: 'flex', gap: '6px' }}>
+        <div style={{ display: 'flex', gap: '4px' }}>
           <button
             className="btn-secondary"
             onClick={() => {
@@ -324,33 +419,33 @@ export const ArchitectureDocsView: React.FC<ArchitectureDocsViewProps> = ({ user
               }
             }}
             title="Centrar arquitectura en pantalla"
-            style={{ padding: '6px', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', fontWeight: 600 }}
+            style={{ padding: '5px', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', fontWeight: 600 }}
           >
-            <Maximize2 size={14} /> Centrar
+            <Maximize2 size={13} /> Centrar
           </button>
           <button
             className="btn-secondary"
             onClick={() => cyRef.current?.zoom(cyRef.current.zoom() * 1.2)}
             title="Acercar zoom"
-            style={{ padding: '6px' }}
+            style={{ padding: '5px' }}
           >
-            <ZoomIn size={14} />
+            <ZoomIn size={13} />
           </button>
           <button
             className="btn-secondary"
             onClick={() => cyRef.current?.zoom(cyRef.current.zoom() * 0.8)}
             title="Alejar zoom"
-            style={{ padding: '6px' }}
+            style={{ padding: '5px' }}
           >
-            <ZoomOut size={14} />
+            <ZoomOut size={13} />
           </button>
           <button
             className="btn-secondary"
             onClick={fetchArchitecture}
             title="Re-inspeccionar código en vivo"
-            style={{ padding: '6px' }}
+            style={{ padding: '5px' }}
           >
-            <RefreshCw size={14} />
+            <RefreshCw size={13} />
           </button>
         </div>
       </div>
@@ -364,7 +459,7 @@ export const ArchitectureDocsView: React.FC<ArchitectureDocsViewProps> = ({ user
           position: 'absolute',
           top: 0,
           right: 0,
-          width: 380,
+          width: 400,
           height: '100%',
           backgroundColor: '#ffffff',
           boxShadow: '-4px 0 16px rgba(0,0,0,0.1)',
@@ -374,12 +469,17 @@ export const ArchitectureDocsView: React.FC<ArchitectureDocsViewProps> = ({ user
           overflowY: 'auto',
           display: 'flex',
           flexDirection: 'column',
-          gap: '16px'
+          gap: '14px'
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span className="badge" style={{ backgroundColor: selectedNode.color, color: '#fff', fontSize: '11px', fontWeight: 700 }}>
-              {selectedNode.category}
-            </span>
+            <div style={{ display: 'flex', gap: '6px' }}>
+              <span className="badge" style={{ backgroundColor: selectedNode.color, color: '#fff', fontSize: '11px', fontWeight: 700 }}>
+                {selectedNode.category}
+              </span>
+              <span className="badge" style={{ backgroundColor: selectedNode.side === 'FRONTEND' ? '#731853' : '#1E293B', color: '#fff', fontSize: '10px' }}>
+                {selectedNode.side || 'BACKEND'}
+              </span>
+            </div>
             <button 
               onClick={() => setSelectedNode(null)} 
               style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748B' }}
@@ -396,6 +496,50 @@ export const ArchitectureDocsView: React.FC<ArchitectureDocsViewProps> = ({ user
               📁 {selectedNode.file_path}
             </p>
           </div>
+
+          {/* Tecnología Detectada */}
+          {selectedNode.technology && (
+            <div style={{ backgroundColor: '#F1F5F9', padding: '10px 12px', borderRadius: '6px', border: '1px solid #CBD5E1' }}>
+              <span style={{ fontSize: '11px', fontWeight: 700, color: '#334155', display: 'block', marginBottom: '2px' }}>
+                Tecnología & Framework:
+              </span>
+              <span style={{ fontSize: '12px', fontWeight: 600, color: '#731853' }}>
+                ⚡ {selectedNode.technology}
+              </span>
+            </div>
+          )}
+
+          {/* Librerías Clave */}
+          {selectedNode.key_libraries && selectedNode.key_libraries.length > 0 && (
+            <div>
+              <span style={{ fontSize: '11px', fontWeight: 700, color: '#475569', display: 'block', marginBottom: '6px' }}>
+                📦 Librerías Clave:
+              </span>
+              <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                {selectedNode.key_libraries.map((lib, i) => (
+                  <span key={i} style={{ fontSize: '10px', backgroundColor: '#EDE9FE', color: '#5B21B6', padding: '2px 7px', borderRadius: '4px', fontWeight: 600 }}>
+                    {lib}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Funciones Clave */}
+          {selectedNode.key_functions && selectedNode.key_functions.length > 0 && (
+            <div>
+              <span style={{ fontSize: '11px', fontWeight: 700, color: '#475569', display: 'block', marginBottom: '6px' }}>
+                ⚙️ Funciones & Métodos Técnicos:
+              </span>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                {selectedNode.key_functions.map((fn, i) => (
+                  <code key={i} style={{ fontSize: '11px', backgroundColor: '#F8FAFC', padding: '3px 6px', borderRadius: '4px', border: '1px solid #E2E8F0', color: '#0F172A' }}>
+                    {fn}
+                  </code>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div style={{ backgroundColor: '#F8FAFC', padding: '12px', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
             <span style={{ fontSize: '11px', fontWeight: 700, color: '#475569', display: 'block', marginBottom: '4px' }}>

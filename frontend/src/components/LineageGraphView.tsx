@@ -44,6 +44,9 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
   const [allNodes, setAllNodes] = useState<NodeData[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
 
+  // Filtro de tecnología (BigQuery, DataStage, Composer, Control-M, Shells, etc.)
+  const [selectedTechFilter, setSelectedTechFilter] = useState<string>('TODOS');
+
   // Buscador y aislamiento upstream/downstream
   const [selectedSearchNodeId, setSelectedSearchNodeId] = useState<string>('');
   const [lineageMode, setLineageMode] = useState<'NONE' | 'UPSTREAM' | 'DOWNSTREAM' | 'FULL'>('NONE');
@@ -65,6 +68,40 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
       console.error("Error al cargar grafo de linaje:", err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Filtrar y enfocar por tecnología
+  const handleFilterByTech = (tech: string) => {
+    setSelectedTechFilter(tech);
+    const cy = cyRef.current;
+    if (!cy) return;
+
+    if (tech === 'TODOS') {
+      cy.elements().removeClass('faded');
+      cy.fit(undefined, 40);
+      return;
+    }
+
+    cy.elements().addClass('faded');
+    let matchingNodes = cy.nodes();
+
+    if (tech === 'OTROS') {
+      matchingNodes = matchingNodes.filter((ele) => {
+        const t = ele.data('tool_type');
+        return !['BIGQUERY', 'DATASTAGE', 'AIRFLOW_COMPOSER', 'CONTROL_M', 'SHELL'].includes(t);
+      });
+    } else {
+      matchingNodes = matchingNodes.filter((ele) => ele.data('tool_type') === tech);
+    }
+
+    // Incluir aristas conectadas entre nodos coincidentes o incidentes
+    const incidentEdges = matchingNodes.connectedEdges();
+    const activeCollection = matchingNodes.union(incidentEdges);
+
+    activeCollection.removeClass('faded');
+    if (matchingNodes.length > 0) {
+      cy.fit(activeCollection, 50);
     }
   };
 
@@ -461,7 +498,43 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
 
         <div style={{ height: '20px', width: '1px', backgroundColor: '#E5E7EB' }} />
 
-        {/* 3. Resumen y Controles de Vista */}
+        {/* 3. Filtros Rápidos por Tecnología */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+          <span style={{ fontSize: '11px', fontWeight: 600, color: '#6B7280', marginRight: '3px' }}>
+            Tecnología:
+          </span>
+          {[
+            { id: 'TODOS', label: 'Todas' },
+            { id: 'BIGQUERY', label: 'BigQuery' },
+            { id: 'DATASTAGE', label: 'DataStage' },
+            { id: 'AIRFLOW_COMPOSER', label: 'Composer' },
+            { id: 'CONTROL_M', label: 'Control-M' },
+            { id: 'SHELL', label: 'Shell' },
+            { id: 'OTROS', label: 'Otros' },
+          ].map((tech) => (
+            <button
+              key={tech.id}
+              onClick={() => handleFilterByTech(tech.id)}
+              style={{
+                fontSize: '11px',
+                padding: '3px 8px',
+                borderRadius: '12px',
+                border: selectedTechFilter === tech.id ? '1px solid #731853' : '1px solid #E5E7EB',
+                backgroundColor: selectedTechFilter === tech.id ? '#731853' : '#F9FAFB',
+                color: selectedTechFilter === tech.id ? '#FFFFFF' : '#374151',
+                fontWeight: selectedTechFilter === tech.id ? 700 : 500,
+                cursor: 'pointer',
+                transition: 'all 0.15s ease'
+              }}
+            >
+              {tech.label}
+            </button>
+          ))}
+        </div>
+
+        <div style={{ height: '20px', width: '1px', backgroundColor: '#E5E7EB' }} />
+
+        {/* 4. Resumen y Controles de Vista */}
         <div style={{ fontSize: '12px', color: '#6B7280' }}>
           <b>{totalNodes}</b> componentes | <b>{totalEdges}</b> dependencias
         </div>

@@ -1,11 +1,25 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, Save, Check } from 'lucide-react';
+import { ArrowLeft, Save, Check, DollarSign, AlertTriangle, RefreshCw, TrendingUp, Cpu } from 'lucide-react';
+
+interface ModelCostsData {
+  total_cost_usd: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_calls: number;
+  budget_limit_usd: number;
+  budget_consumed_percentage: number;
+  alert_triggered: boolean;
+  cost_by_model: { [key: string]: number };
+  tokens_by_model: { [key: string]: number };
+  last_updated: string;
+}
 
 interface ConfigViewProps {
   onBack: () => void;
+  userRole?: string;
 }
 
-export const ConfigView: React.FC<ConfigViewProps> = ({ onBack }) => {
+export const ConfigView: React.FC<ConfigViewProps> = ({ onBack, userRole = 'Developer' }) => {
   const [config, setConfig] = useState<any>({
     app_name: 'Plataforma de Linaje End-to-End',
     subtitle: 'Observabilidad y Linaje de Datos Multi-Herramienta',
@@ -28,13 +42,40 @@ export const ConfigView: React.FC<ConfigViewProps> = ({ onBack }) => {
   });
 
   const [savedField, setSavedField] = useState<string | null>(null);
+  const [costsData, setCostsData] = useState<ModelCostsData | null>(null);
+  const [loadingCosts, setLoadingCosts] = useState<boolean>(false);
+
+  const isCostAuthorized = userRole === 'Admin' || userRole === 'Developer';
+
+  const fetchCosts = async () => {
+    if (!isCostAuthorized) return;
+    try {
+      setLoadingCosts(true);
+      const res = await fetch('/api/costs/summary');
+      if (res.ok) {
+        const data = await res.json();
+        setCostsData(data);
+      }
+    } catch (e) {
+      console.error("Error al cargar costes de modelos:", e);
+    } finally {
+      setLoadingCosts(false);
+    }
+  };
 
   useEffect(() => {
     fetch('/api/config')
       .then((res) => res.json())
       .then((data) => setConfig(data))
       .catch((err) => console.error("Error al cargar configuración", err));
-  }, []);
+
+    if (isCostAuthorized) {
+      fetchCosts();
+      // Refresco cada 10 minutos (600,000 ms) tal como solicitó el usuario
+      const interval = setInterval(fetchCosts, 600000);
+      return () => clearInterval(interval);
+    }
+  }, [userRole]);
 
   const handleSave = async (fieldKey: string) => {
     try {
@@ -80,6 +121,132 @@ export const ConfigView: React.FC<ConfigViewProps> = ({ onBack }) => {
       <p style={{ fontSize: '13px', color: '#6B7280', marginBottom: '28px' }}>
         Los parámetros de activación de modelos y almacenamiento en GCP son administrados por el sistema.
       </p>
+
+      {/* Panel de Control de Gastos de Modelos IA (Admin & Developer) */}
+      {isCostAuthorized && (
+        <div style={{
+          backgroundColor: '#FFFFFF',
+          borderRadius: '12px',
+          border: costsData?.alert_triggered ? '2px solid #DC2626' : '1px solid #E2E8F0',
+          padding: '24px',
+          marginBottom: '32px',
+          boxShadow: costsData?.alert_triggered ? '0 4px 12px rgba(220, 38, 38, 0.1)' : '0 2px 6px rgba(0,0,0,0.04)'
+        }}>
+          {/* Header del panel */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                <DollarSign size={20} color="#731853" />
+                <h2 style={{ fontSize: '18px', fontWeight: 800, color: '#0F172A', margin: 0 }}>
+                  Auditoría y Control de Costes de Modelos IA
+                </h2>
+                {costsData?.alert_triggered ? (
+                  <span style={{ fontSize: '11px', fontWeight: 800, padding: '3px 10px', borderRadius: '12px', backgroundColor: '#FEF2F2', color: '#DC2626', border: '1px solid #FCA5A5', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <AlertTriangle size={13} /> ¡ALERTA! Consumo ≥ 80% del presupuesto
+                  </span>
+                ) : (
+                  <span style={{ fontSize: '11px', fontWeight: 700, padding: '3px 10px', borderRadius: '12px', backgroundColor: '#F0FDF4', color: '#16A34A', border: '1px solid #86EFAC' }}>
+                    ✓ Presupuesto Óptimo
+                  </span>
+                )}
+              </div>
+              <p style={{ fontSize: '12px', color: '#64748B', margin: 0 }}>
+                Auditoría en tiempo real en BigQuery (<code style={{ color: '#731853', fontWeight: 600 }}>applineajedatos.app_model_usage_logs</code>). Refresco automático cada 10 min.
+              </p>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <span style={{ fontSize: '11px', color: '#94A3B8' }}>
+                Última sincronización: {costsData?.last_updated ? new Date(costsData.last_updated).toLocaleTimeString() : 'reciente'}
+              </span>
+              <button
+                onClick={fetchCosts}
+                disabled={loadingCosts}
+                className="btn-secondary"
+                style={{ fontSize: '12px', padding: '6px 12px', display: 'flex', alignItems: 'center', gap: '6px' }}
+              >
+                <RefreshCw size={13} className={loadingCosts ? 'animate-spin' : ''} /> Refrescar
+              </button>
+            </div>
+          </div>
+
+          {/* Barra de Consumo de Presupuesto */}
+          <div style={{ marginBottom: '24px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', fontWeight: 600, color: '#334155', marginBottom: '6px' }}>
+              <span>Presupuesto Mensual Estimado</span>
+              <span>
+                ${costsData?.total_cost_usd?.toFixed(4) || '0.0000'} / ${costsData?.budget_limit_usd?.toFixed(2) || '50.00'} USD ({costsData?.budget_consumed_percentage || 0}%)
+              </span>
+            </div>
+            <div style={{ width: '100%', height: '10px', backgroundColor: '#F1F5F9', borderRadius: '5px', overflow: 'hidden' }}>
+              <div 
+                style={{
+                  width: `${Math.min(costsData?.budget_consumed_percentage || 0, 100)}%`,
+                  height: '100%',
+                  backgroundColor: (costsData?.budget_consumed_percentage || 0) >= 80 ? '#DC2626' : (costsData?.budget_consumed_percentage || 0) >= 50 ? '#D97706' : '#16A34A',
+                  transition: 'width 0.5s ease',
+                  borderRadius: '5px'
+                }}
+              />
+            </div>
+          </div>
+
+          {/* Tarjetas de Métricas Rápidas */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px', marginBottom: '20px' }}>
+            <div style={{ backgroundColor: '#F8FAFC', padding: '14px', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
+              <span style={{ fontSize: '11px', color: '#64748B', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Costo Total Incurrido</span>
+              <span style={{ fontSize: '20px', fontWeight: 800, color: '#731853' }}>
+                ${costsData?.total_cost_usd?.toFixed(4) || '0.0000'} <small style={{ fontSize: '11px', color: '#64748B' }}>USD</small>
+              </span>
+            </div>
+
+            <div style={{ backgroundColor: '#F8FAFC', padding: '14px', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
+              <span style={{ fontSize: '11px', color: '#64748B', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Tokens de Entrada</span>
+              <span style={{ fontSize: '20px', fontWeight: 800, color: '#0F172A' }}>
+                {costsData?.total_input_tokens?.toLocaleString() || '0'}
+              </span>
+            </div>
+
+            <div style={{ backgroundColor: '#F8FAFC', padding: '14px', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
+              <span style={{ fontSize: '11px', color: '#64748B', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Tokens de Salida</span>
+              <span style={{ fontSize: '20px', fontWeight: 800, color: '#0F172A' }}>
+                {costsData?.total_output_tokens?.toLocaleString() || '0'}
+              </span>
+            </div>
+
+            <div style={{ backgroundColor: '#F8FAFC', padding: '14px', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
+              <span style={{ fontSize: '11px', color: '#64748B', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Llamadas a Modelos</span>
+              <span style={{ fontSize: '20px', fontWeight: 800, color: '#0F172A' }}>
+                {costsData?.total_calls || 0}
+              </span>
+            </div>
+          </div>
+
+          {/* Desglose por Modelo */}
+          {costsData?.cost_by_model && Object.keys(costsData.cost_by_model).length > 0 && (
+            <div style={{ backgroundColor: '#F8FAFC', borderRadius: '8px', padding: '14px 18px', border: '1px solid #E2E8F0' }}>
+              <span style={{ fontSize: '12px', fontWeight: 700, color: '#334155', display: 'block', marginBottom: '10px' }}>
+                Consumo Detallado por Modelo:
+              </span>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '12px' }}>
+                {Object.entries(costsData.cost_by_model).map(([model, cost]) => (
+                  <div key={model} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#FFFFFF', padding: '10px 14px', borderRadius: '6px', border: '1px solid #E2E8F0' }}>
+                    <div>
+                      <div style={{ fontSize: '12px', fontWeight: 700, color: '#0F172A' }}>{model}</div>
+                      <div style={{ fontSize: '11px', color: '#64748B' }}>
+                        Tokens: {costsData.tokens_by_model?.[model]?.toLocaleString() || 0}
+                      </div>
+                    </div>
+                    <span style={{ fontSize: '13px', fontWeight: 800, color: '#731853' }}>
+                      ${cost.toFixed(4)} USD
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Cuadrícula de Parámetros (Estilo exacto de las tarjetas de Imagen 4) */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(480px, 1fr))', gap: '20px' }}>

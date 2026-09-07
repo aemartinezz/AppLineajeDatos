@@ -9,8 +9,9 @@ import { InboxManagerView } from './components/InboxManagerView';
 import { ArchitectureDocsView } from './components/ArchitectureDocsView';
 import { LiveExecutionMonitorView } from './components/LiveExecutionMonitorView';
 import { UserManagementView } from './components/UserManagementView';
+import { ErrorTrackingView } from './components/ErrorTrackingView';
 import { SimulationTestModal } from './components/SimulationTestModal';
-import { GitFork, Activity, ShieldCheck, Database, FileText, ArrowRight, Code, Shield, Users } from 'lucide-react';
+import { GitFork, Activity, ShieldCheck, Database, FileText, ArrowRight, Code, Shield, Users, AlertOctagon } from 'lucide-react';
 import './styles/theme.css';
 
 export const App: React.FC = () => {
@@ -150,9 +151,14 @@ export const App: React.FC = () => {
                   </button>
                 )}
                 {(userRole === 'Developer' || userRole === 'Admin') && (
-                  <button className="btn-secondary" onClick={() => setActiveTab('arquitectura')}>
-                    <Code size={16} /> Arquitectura Viva (Dev)
-                  </button>
+                  <>
+                    <button className="btn-secondary" onClick={() => setActiveTab('errores')}>
+                      <AlertOctagon size={16} /> Gestión de Errores
+                    </button>
+                    <button className="btn-secondary" onClick={() => setActiveTab('arquitectura')}>
+                      <Code size={16} /> Arquitectura Viva (Dev)
+                    </button>
+                  </>
                 )}
               </div>
             </div>
@@ -166,6 +172,13 @@ export const App: React.FC = () => {
             : <LiveExecutionMonitorView />
         )}
 
+        {/* TAB: Gestión de Errores y Trazas Técnicas (Developer o Admin) */}
+        {activeTab === 'errores' && (
+          userRole === 'Viewer' || userRole === 'Auditor'
+            ? renderAccessRestricted('Developer o Admin', 'La consola de gestión y seguimiento de errores de la plataforma está restringida al equipo técnico.')
+            : <ErrorTrackingView userRole={userRole} userEmail="aemartinezz@liverpool.com.mx" onChangeRole={(r) => setUserRole(r)} />
+        )}
+
         {/* TAB 4: Bandeja Archivos (Inbox) */}
         {activeTab === 'bandeja' && (
           userRole === 'Viewer' || userRole === 'Auditor'
@@ -173,11 +186,11 @@ export const App: React.FC = () => {
             : <InboxManagerView onOpenUpload={() => setIsUploadOpen(true)} />
         )}
 
-        {/* TAB 5: Configuración Dinámica (Solo Admin) */}
+        {/* TAB 5: Configuración Dinámica (Admin o Developer para Costos) */}
         {activeTab === 'configuracion' && (
-          userRole !== 'Admin'
-            ? renderAccessRestricted('Admin', 'La parametrización de modelos fundacionales de IA (Flash/Pro), cuotas y buckets de almacenamiento es de acceso exclusivo para administradores.')
-            : <ConfigView onBack={() => setActiveTab('inicio')} />
+          userRole === 'Viewer' || userRole === 'Auditor'
+            ? renderAccessRestricted('Admin o Developer', 'La parametrización de modelos fundacionales de IA (Flash/Pro), cuotas y auditoría de gastos es de acceso técnico.')
+            : <ConfigView onBack={() => setActiveTab('inicio')} userRole={userRole} />
         )}
 
         {/* TAB 6: Usuarios y Roles (Solo Admin) */}

@@ -2,7 +2,7 @@ import React from 'react';
 import { 
   Menu, Shield, FlaskConical, Home, GitFork, 
   Activity, FolderUp, Settings, FileSearch, CheckCircle2,
-  Code, Users
+  Code, Users, AlertOctagon
 } from 'lucide-react';
 import { SimulationModeBanner } from './SimulationModeBanner';
 
@@ -33,8 +33,9 @@ export const TopMegaMenu: React.FC<TopMegaMenuProps> = ({
     { id: 'inicio', title: 'Inicio', subtitle: 'Resumen y métricas', icon: Home },
     { id: 'grafo', title: 'Grafo Linaje', subtitle: 'Explorador interactivo E2E', icon: GitFork },
     { id: 'estatus', title: 'Estatus en Vivo', subtitle: 'Monitoreo tras bambalinas', icon: Activity },
+    { id: 'errores', title: 'Gestión de Errores', subtitle: 'Incidencias y trazas BigQuery', icon: AlertOctagon, badge: 'DEV / ADMIN' },
     { id: 'bandeja', title: 'Bandeja Archivos', subtitle: 'Carga e inferencia (Inbox)', icon: FolderUp },
-    { id: 'configuracion', title: 'Configuración', subtitle: 'Modelos IA y parámetros', icon: Settings, badge: 'ADMIN' },
+    { id: 'configuracion', title: 'Configuración', subtitle: 'Modelos IA y gastos', icon: Settings, badge: 'ADMIN' },
     { id: 'usuarios', title: 'Usuarios y Roles', subtitle: 'Catálogo RBAC BigQuery', icon: Users, badge: 'ADMIN' },
     { id: 'arquitectura', title: 'Arquitectura Viva', subtitle: 'Grafo de código (Dev/Admin)', icon: Code, badge: 'DEV / ADMIN' },
     { id: 'auditoria', title: 'Auditoría', subtitle: 'Historial de procesamiento', icon: FileSearch },
