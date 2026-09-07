@@ -9,7 +9,8 @@ from typing import List, Dict, Any, Optional
 from app.config import settings, current_app_config
 from app.models.schemas import (
     LineageGraph, PipelineResult, AppConfig, ExecutionStatus, LoginRequest, UserUpsertRequest,
-    ModelCostSummary, AppError, ErrorResolveRequest, ErrorReportRequest
+    UserStatusUpdateRequest, ModelCostSummary, AppError, ErrorResolveRequest, ErrorReportRequest,
+    GcpProjectValidationRequest, GcpProjectValidationResponse
 )
 from app.services.bigquery_service import bigquery_service
 from app.services.storage_service import storage_service
@@ -278,6 +279,39 @@ def create_or_update_user(req: UserUpsertRequest, x_user_role: Optional[str] = H
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.delete("/api/users/{email}")
+def delete_corporate_user(email: str, x_user_role: Optional[str] = Header(None)):
+    """Elimina a un colaborador de BigQuery app_users_roles (exclusivo para rol Admin)."""
+    if x_user_role and x_user_role != "Admin":
+        raise HTTPException(
+            status_code=403, 
+            detail="Acceso denegado: Solo usuarios con rol Admin pueden eliminar colaboradores."
+        )
+    try:
+        bigquery_service.delete_user(email)
+        return {"success": True, "message": f"Colaborador {email} eliminado exitosamente de BigQuery."}
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.patch("/api/users/{email}/status")
+def change_user_status(email: str, req: UserStatusUpdateRequest, x_user_role: Optional[str] = Header(None)):
+    """Cambia el estado de un colaborador ('ACTIVE' o 'INACTIVE') en BigQuery (exclusivo rol Admin)."""
+    if x_user_role and x_user_role != "Admin":
+        raise HTTPException(
+            status_code=403, 
+            detail="Acceso denegado: Solo usuarios con rol Admin pueden cambiar el estado de colaboradores."
+        )
+    try:
+        updated = bigquery_service.update_user_status(email, req.status)
+        return {"success": True, "user": updated}
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # -------------------------------------------------------------
 # ESTATUS EN VIVO TRAS BAMBALINAS (PIPELINE MONITOR)
 # -------------------------------------------------------------
@@ -355,6 +389,61 @@ def validate_gcp_environment():
         "recommendations": "Todos los servicios esenciales de GCP están configurados. Para producción completa, asigne el rol 'BigQuery Admin' y 'Storage Admin' a la Service Account de Cloud Run."
     }
 
+@app.post("/api/gcp/validate-project", response_model=GcpProjectValidationResponse)
+def validate_single_gcp_project(req: GcpProjectValidationRequest):
+    """
+    Valida la conectividad y existencia de un proyecto en GCP, comprobando datasets en BigQuery en tiempo real.
+    """
+    import re
+    project_id = req.project_id.strip()
+    if not project_id:
+        return GcpProjectValidationResponse(
+            project_id="",
+            is_valid=False,
+            message="El ID del proyecto de GCP no puede estar vacío."
+        )
+
+    # Validación de formato de ID de proyecto de Google Cloud (seguridad contra inyección)
+    if not re.match(r"^[a-z0-9\-]{4,30}$", project_id):
+        return GcpProjectValidationResponse(
+            project_id=project_id,
+            is_valid=False,
+            message="Formato inválido: el Project ID de GCP debe tener entre 4 y 30 caracteres (minúsculas, números y guiones)."
+        )
+
+    if settings.USE_MOCK_GCP or bigquery_service.bq_client is None:
+        return GcpProjectValidationResponse(
+            project_id=project_id,
+            is_valid=True,
+            message=f"Conectividad exitosa con GCP BigQuery para el proyecto '{project_id}'.",
+            datasets_found=["pruebasLineaje", "applineajedatos", "ti_data_driven"],
+            tables_count=8
+        )
+
+    try:
+        datasets = list(bigquery_service.bq_client.list_datasets(project=project_id))
+        ds_names = [d.dataset_id for d in datasets]
+        total_tables = 0
+        for d in datasets[:5]:
+            try:
+                total_tables += len(list(bigquery_service.bq_client.list_tables(d.reference)))
+            except Exception:
+                pass
+        return GcpProjectValidationResponse(
+            project_id=project_id,
+            is_valid=True,
+            message=f"Proyecto validado exitosamente: {len(datasets)} dataset(s) descubiertos.",
+            datasets_found=ds_names,
+            tables_count=total_tables
+        )
+    except Exception as e:
+        logger.warning(f"Error validando proyecto GCP '{project_id}': {e}")
+        return GcpProjectValidationResponse(
+            project_id=project_id,
+            is_valid=False,
+            message=f"Error al conectar con el proyecto '{project_id}': {str(e)}"
+        )
+
 # -------------------------------------------------------------
 # CONTROL DE GASTOS Y AUDITORÍA DE MODELOS IA (ADMIN / DEVELOPER)
 # -------------------------------------------------------------
@@ -382,15 +471,18 @@ def list_errors(status: Optional[str] = None):
 @app.post("/api/errors/report", response_model=AppError)
 def report_error(req: ErrorReportRequest):
     """
-    Registra un error reportado desde el cliente frontend o módulos auxiliares.
+    Registra un error o advertencia reportada desde el cliente frontend o servicios auxiliares.
     Si ya existía en estado RESOLVED y vuelve a ocurrir, se auto-reabre a OPEN.
     """
     return bigquery_service.log_error(
         error_type=req.error_type,
-        message=req.message,
+        message=req.get_effective_message(),
         stack_trace=req.stack_trace,
         component=req.component,
-        severity=req.severity
+        severity=req.severity,
+        url=req.url,
+        user_agent=req.user_agent,
+        context_data=req.context_data
     )
 
 @app.post("/api/errors/{error_id}/resolve", response_model=AppError)

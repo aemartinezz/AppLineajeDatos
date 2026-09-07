@@ -1,5 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, Save, Check, DollarSign, AlertTriangle, RefreshCw, TrendingUp, Cpu } from 'lucide-react';
+import { 
+  ArrowLeft, Save, Check, DollarSign, AlertTriangle, RefreshCw, TrendingUp, 
+  Cpu, Plus, Trash2, CheckCircle2, XCircle, Loader2, ShieldCheck, Database, Layers
+} from 'lucide-react';
 
 interface ModelCostsData {
   total_cost_usd: number;
@@ -23,13 +26,15 @@ export const ConfigView: React.FC<ConfigViewProps> = ({ onBack, userRole = 'Deve
   const [config, setConfig] = useState<any>({
     app_name: 'Plataforma de Linaje End-to-End',
     subtitle: 'Observabilidad y Linaje de Datos Multi-Herramienta',
-    model_config: {
+    models_settings: {
       light_model_name: 'gemini-1.5-flash',
       light_temperature: 0.1,
       light_max_tokens: 1024,
       escalate_confidence_threshold: 0.85,
       advanced_model_name: 'gemini-1.5-pro',
       advanced_temperature: 0.1,
+      monthly_budget_usd: 50.0,
+      alert_threshold_pct: 80.0,
     },
     storage_config: {
       inbox_bucket: 'gs://datosdeentrada',
@@ -37,6 +42,7 @@ export const ConfigView: React.FC<ConfigViewProps> = ({ onBack, userRole = 'Deve
       quarantine_bucket: 'gs://datosquarentena',
       gcp_project_id: 'crp-poc-it-hackathon-13',
       bq_dataset: 'applineajedatos',
+      monitored_projects: ['crp-poc-it-hackathon-13'],
     },
     default_confidence_threshold: 0.80,
   });
@@ -45,7 +51,18 @@ export const ConfigView: React.FC<ConfigViewProps> = ({ onBack, userRole = 'Deve
   const [costsData, setCostsData] = useState<ModelCostsData | null>(null);
   const [loadingCosts, setLoadingCosts] = useState<boolean>(false);
 
+  // Estados para Presupuesto Editable
+  const [editBudgetUsd, setEditBudgetUsd] = useState<number>(50.0);
+  const [editAlertPct, setEditAlertPct] = useState<number>(80.0);
+  const [savingBudget, setSavingBudget] = useState<boolean>(false);
+
+  // Estados para Monitoreo Multi-Proyecto GCP
+  const [newProjectInput, setNewProjectInput] = useState<string>('');
+  const [validatingProject, setValidatingProject] = useState<string | null>(null);
+  const [validationResults, setValidationResults] = useState<{ [key: string]: { isValid: boolean; message: string; datasetsCount?: number; tablesCount?: number } }>({});
+
   const isCostAuthorized = userRole === 'Admin' || userRole === 'Developer';
+  const isAdmin = userRole === 'Admin';
 
   const fetchCosts = async () => {
     if (!isCostAuthorized) return;
@@ -55,6 +72,9 @@ export const ConfigView: React.FC<ConfigViewProps> = ({ onBack, userRole = 'Deve
       if (res.ok) {
         const data = await res.json();
         setCostsData(data);
+        if (data.budget_limit_usd) {
+          setEditBudgetUsd(data.budget_limit_usd);
+        }
       }
     } catch (e) {
       console.error("Error al cargar costes de modelos:", e);
@@ -66,31 +86,122 @@ export const ConfigView: React.FC<ConfigViewProps> = ({ onBack, userRole = 'Deve
   useEffect(() => {
     fetch('/api/config')
       .then((res) => res.json())
-      .then((data) => setConfig(data))
+      .then((data) => {
+        setConfig(data);
+        if (data.models_settings?.monthly_budget_usd) {
+          setEditBudgetUsd(data.models_settings.monthly_budget_usd);
+        }
+        if (data.models_settings?.alert_threshold_pct) {
+          setEditAlertPct(data.models_settings.alert_threshold_pct);
+        }
+      })
       .catch((err) => console.error("Error al cargar configuración", err));
 
     if (isCostAuthorized) {
       fetchCosts();
-      // Refresco cada 10 minutos (600,000 ms) tal como solicitó el usuario
       const interval = setInterval(fetchCosts, 600000);
       return () => clearInterval(interval);
     }
   }, [userRole]);
 
-  const handleSave = async (fieldKey: string) => {
+  const handleSave = async (fieldKey: string, customConfig?: any) => {
     try {
+      const payload = customConfig || config;
       const res = await fetch('/api/config', {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(config),
+        headers: { 
+          'Content-Type': 'application/json',
+          'x-user-role': userRole 
+        },
+        body: JSON.stringify(payload),
       });
       if (res.ok) {
+        const updated = await res.json();
+        setConfig(updated);
         setSavedField(fieldKey);
         setTimeout(() => setSavedField(null), 2500);
+        fetchCosts();
       }
     } catch (e) {
       console.error("Error al guardar configuración", e);
     }
+  };
+
+  const handleSaveBudget = async () => {
+    setSavingBudget(true);
+    const updatedConfig = {
+      ...config,
+      models_settings: {
+        ...config.models_settings,
+        monthly_budget_usd: editBudgetUsd,
+        alert_threshold_pct: editAlertPct,
+      }
+    };
+    await handleSave('budget', updatedConfig);
+    setSavingBudget(false);
+  };
+
+  const handleValidateProject = async (projectId: string) => {
+    try {
+      setValidatingProject(projectId);
+      const res = await fetch('/api/gcp/validate-project', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_id: projectId })
+      });
+      const data = await res.json();
+      setValidationResults(prev => ({
+        ...prev,
+        [projectId]: {
+          isValid: data.is_valid,
+          message: data.message,
+          datasetsCount: data.datasets_found?.length || 0,
+          tablesCount: data.tables_count || 0
+        }
+      }));
+    } catch (err: any) {
+      setValidationResults(prev => ({
+        ...prev,
+        [projectId]: {
+          isValid: false,
+          message: err.message || 'Error de conexión con GCP'
+        }
+      }));
+    } finally {
+      setValidatingProject(null);
+    }
+  };
+
+  const handleAddProject = () => {
+    const clean = newProjectInput.trim();
+    if (!clean) return;
+    const currentList: string[] = config.storage_config?.monitored_projects || [config.storage_config?.gcp_project_id || 'crp-poc-it-hackathon-13'];
+    if (!currentList.includes(clean)) {
+      const updated = [...currentList, clean];
+      const updatedConfig = {
+        ...config,
+        storage_config: { ...config.storage_config, monitored_projects: updated }
+      };
+      setConfig(updatedConfig);
+      handleSave('monitored_projects', updatedConfig);
+      handleValidateProject(clean);
+    }
+    setNewProjectInput('');
+  };
+
+  const handleRemoveProject = (proj: string) => {
+    const currentList: string[] = config.storage_config?.monitored_projects || [];
+    if (currentList.length <= 1) {
+      alert("Debe mantenerse al menos un proyecto monitoreado en la configuración.");
+      return;
+    }
+    const updated = currentList.filter(p => p !== proj);
+    const updatedConfig = {
+      ...config,
+      storage_config: { ...config.storage_config, monitored_projects: updated }
+    };
+    setConfig(updatedConfig);
+    handleSave('monitored_projects', updatedConfig);
   };
 
   return (
@@ -222,6 +333,72 @@ export const ConfigView: React.FC<ConfigViewProps> = ({ onBack, userRole = 'Deve
             </div>
           </div>
 
+          {/* Configuración de Presupuesto Mensual y Umbral de Alerta */}
+          <div style={{ backgroundColor: '#F8FAFC', borderRadius: '8px', padding: '16px 20px', border: '1px solid #E2E8F0', marginBottom: '20px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <ShieldCheck size={18} color="#731853" />
+                <span style={{ fontSize: '13px', fontWeight: 700, color: '#1E293B' }}>
+                  Ajuste de Presupuesto y Umbral Preventivo de Alerta
+                </span>
+              </div>
+              {savedField === 'budget' && (
+                <span style={{ fontSize: '12px', color: '#16A34A', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <CheckCircle2 size={14} /> Presupuesto actualizado en BigQuery
+                </span>
+              )}
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', alignItems: 'flex-end' }}>
+              <div>
+                <label style={{ fontSize: '11px', fontWeight: 600, color: '#64748B', display: 'block', marginBottom: '4px' }}>
+                  Límite de Presupuesto Mensual ($ USD)
+                </label>
+                <input
+                  type="number"
+                  step="5"
+                  min="5"
+                  max="10000"
+                  value={editBudgetUsd}
+                  onChange={(e) => setEditBudgetUsd(parseFloat(e.target.value) || 0)}
+                  disabled={!isAdmin && userRole !== 'Developer'}
+                  style={{ width: '100%', padding: '8px 12px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '13px', backgroundColor: '#FFFFFF' }}
+                />
+              </div>
+
+              <div>
+                <label style={{ fontSize: '11px', fontWeight: 600, color: '#64748B', display: 'block', marginBottom: '4px' }}>
+                  Umbral de Alerta Temprana (% Consumo)
+                </label>
+                <input
+                  type="number"
+                  step="5"
+                  min="10"
+                  max="100"
+                  value={editAlertPct}
+                  onChange={(e) => setEditAlertPct(parseFloat(e.target.value) || 0)}
+                  disabled={!isAdmin && userRole !== 'Developer'}
+                  style={{ width: '100%', padding: '8px 12px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '13px', backgroundColor: '#FFFFFF' }}
+                />
+              </div>
+
+              <div>
+                <button
+                  onClick={handleSaveBudget}
+                  disabled={savingBudget || (!isAdmin && userRole !== 'Developer')}
+                  className="btn-primary"
+                  style={{ width: '100%', padding: '8px 16px', fontSize: '13px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+                >
+                  {savingBudget ? (
+                    <><Loader2 size={14} className="animate-spin" /> Guardando...</>
+                  ) : (
+                    <><Save size={14} /> Guardar Presupuesto</>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+
           {/* Desglose por Modelo */}
           {costsData?.cost_by_model && Object.keys(costsData.cost_by_model).length > 0 && (
             <div style={{ backgroundColor: '#F8FAFC', borderRadius: '8px', padding: '14px 18px', border: '1px solid #E2E8F0' }}>
@@ -299,8 +476,12 @@ export const ConfigView: React.FC<ConfigViewProps> = ({ onBack, userRole = 'Deve
           </div>
           <div style={{ fontSize: '12px', color: '#6B7280', marginBottom: '12px' }}>Modelo de Vertex AI para la primera pasada de IA (Rápido y económico).</div>
           <select
-            value={config.model_config?.light_model_name || 'gemini-1.5-flash'}
-            onChange={(e) => setConfig({ ...config, model_config: { ...config.model_config, light_model_name: e.target.value } })}
+            value={config.models_settings?.light_model_name || config.model_config?.light_model_name || 'gemini-1.5-flash'}
+            onChange={(e) => setConfig({ 
+              ...config, 
+              models_settings: { ...(config.models_settings || {}), light_model_name: e.target.value },
+              model_config: { ...(config.model_config || {}), light_model_name: e.target.value } 
+            })}
             style={{ width: '100%', padding: '9px 12px', borderRadius: '6px', border: '1px solid #D1D5DB', fontSize: '14px', marginBottom: '14px', backgroundColor: '#ffffff' }}
           >
             <option value="gemini-1.5-flash">gemini-1.5-flash (Recomendado)</option>
@@ -325,8 +506,15 @@ export const ConfigView: React.FC<ConfigViewProps> = ({ onBack, userRole = 'Deve
             step="0.05"
             min="0"
             max="1"
-            value={config.model_config?.escalate_confidence_threshold ?? 0.85}
-            onChange={(e) => setConfig({ ...config, model_config: { ...config.model_config, escalate_confidence_threshold: parseFloat(e.target.value) } })}
+            value={config.models_settings?.escalate_confidence_threshold ?? config.model_config?.escalate_confidence_threshold ?? 0.85}
+            onChange={(e) => {
+              const val = parseFloat(e.target.value);
+              setConfig({ 
+                ...config, 
+                models_settings: { ...(config.models_settings || {}), escalate_confidence_threshold: val },
+                model_config: { ...(config.model_config || {}), escalate_confidence_threshold: val } 
+              });
+            }}
             style={{ width: '100%', padding: '9px 12px', borderRadius: '6px', border: '1px solid #D1D5DB', fontSize: '14px', marginBottom: '14px' }}
           />
           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
@@ -344,8 +532,12 @@ export const ConfigView: React.FC<ConfigViewProps> = ({ onBack, userRole = 'Deve
           </div>
           <div style={{ fontSize: '12px', color: '#6B7280', marginBottom: '12px' }}>Modelo de alta capacidad para casos de extrema complejidad o baja certeza.</div>
           <select
-            value={config.model_config?.advanced_model_name || 'gemini-1.5-pro'}
-            onChange={(e) => setConfig({ ...config, model_config: { ...config.model_config, advanced_model_name: e.target.value } })}
+            value={config.models_settings?.advanced_model_name || config.model_config?.advanced_model_name || 'gemini-1.5-pro'}
+            onChange={(e) => setConfig({ 
+              ...config, 
+              models_settings: { ...(config.models_settings || {}), advanced_model_name: e.target.value },
+              model_config: { ...(config.model_config || {}), advanced_model_name: e.target.value } 
+            })}
             style={{ width: '100%', padding: '9px 12px', borderRadius: '6px', border: '1px solid #D1D5DB', fontSize: '14px', marginBottom: '14px', backgroundColor: '#ffffff' }}
           >
             <option value="gemini-1.5-pro">gemini-1.5-pro (Máxima precisión)</option>
@@ -363,7 +555,7 @@ export const ConfigView: React.FC<ConfigViewProps> = ({ onBack, userRole = 'Deve
             <span style={{ fontSize: '12px', fontWeight: 700, color: '#111827' }}>GCP_PROJECT_ID</span>
             <span className="badge" style={{ backgroundColor: '#FAF0F5', color: '#731853', fontSize: '10px' }}>Editable</span>
           </div>
-          <div style={{ fontSize: '12px', color: '#6B7280', marginBottom: '12px' }}>Proyecto de Google Cloud donde residen BigQuery y Storage.</div>
+          <div style={{ fontSize: '12px', color: '#6B7280', marginBottom: '12px' }}>Proyecto primario de Google Cloud donde residen BigQuery y Storage.</div>
           <input
             type="text"
             value={config.storage_config?.gcp_project_id || 'crp-poc-it-hackathon-13'}
@@ -373,6 +565,103 @@ export const ConfigView: React.FC<ConfigViewProps> = ({ onBack, userRole = 'Deve
           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
             <button className="btn-outline" onClick={() => handleSave('gcp_proj')}>
               {savedField === 'gcp_proj' ? <><Check size={14} /> Guardado</> : 'Guardar'}
+            </button>
+          </div>
+        </div>
+
+        {/* Card: PROYECTOS_GCP_MONITOREADOS (Multi-Proyecto BigQuery) */}
+        <div className="card" style={{ padding: '20px', gridColumn: 'span 2' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Layers size={18} color="#731853" />
+              <span style={{ fontSize: '13px', fontWeight: 700, color: '#111827' }}>PROYECTOS_GCP_MONITOREADOS (Multi-Proyecto BigQuery)</span>
+            </div>
+            <span className="badge" style={{ backgroundColor: '#FAF0F5', color: '#731853', fontSize: '11px', fontWeight: 700 }}>
+              Multi-Tenant / Auto-Discovery
+            </span>
+          </div>
+          <div style={{ fontSize: '12px', color: '#6B7280', marginBottom: '16px' }}>
+            Listado de proyectos de Google Cloud donde el motor de linaje escanea e indexa esquemas, datasets y tablas de BigQuery.
+          </div>
+
+          {/* Lista de proyectos configurados */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '16px' }}>
+            {((config.storage_config?.monitored_projects as string[]) || ['crp-poc-it-hackathon-13']).map((proj) => {
+              const res = validationResults[proj];
+              const isValidating = validatingProject === proj;
+              return (
+                <div 
+                  key={proj}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '12px 16px',
+                    borderRadius: '8px',
+                    border: '1px solid #E2E8F0',
+                    backgroundColor: '#F8FAFC',
+                    flexWrap: 'wrap',
+                    gap: '10px'
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <Database size={16} color="#731853" />
+                    <span style={{ fontSize: '13px', fontWeight: 700, color: '#0F172A', fontFamily: 'monospace' }}>
+                      {proj}
+                    </span>
+                    {res && (
+                      res.isValid ? (
+                        <span style={{ fontSize: '11px', fontWeight: 600, color: '#16A34A', backgroundColor: '#F0FDF4', padding: '2px 8px', borderRadius: '12px', border: '1px solid #BBF7D0', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <CheckCircle2 size={12} /> Conectado ({res.datasetsCount} datasets, {res.tablesCount} tablas)
+                        </span>
+                      ) : (
+                        <span style={{ fontSize: '11px', fontWeight: 600, color: '#DC2626', backgroundColor: '#FEF2F2', padding: '2px 8px', borderRadius: '12px', border: '1px solid #FECACA', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <XCircle size={12} /> {res.message}
+                        </span>
+                      )
+                    )}
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <button
+                      onClick={() => handleValidateProject(proj)}
+                      disabled={isValidating}
+                      className="btn-outline"
+                      style={{ fontSize: '11px', padding: '4px 10px', display: 'flex', alignItems: 'center', gap: '4px' }}
+                    >
+                      {isValidating ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                      Validar Conectividad
+                    </button>
+                    <button
+                      onClick={() => handleRemoveProject(proj)}
+                      className="btn-outline"
+                      style={{ fontSize: '11px', padding: '4px 8px', color: '#DC2626', borderColor: '#FECACA' }}
+                      title="Eliminar proyecto monitoreado"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Formulario para agregar nuevo proyecto */}
+          <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+            <input
+              type="text"
+              placeholder="Ej: mi-proyecto-analytics-prod"
+              value={newProjectInput}
+              onChange={(e) => setNewProjectInput(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleAddProject()}
+              style={{ flex: 1, padding: '8px 12px', borderRadius: '6px', border: '1px solid #D1D5DB', fontSize: '13px' }}
+            />
+            <button
+              onClick={handleAddProject}
+              className="btn-secondary"
+              style={{ padding: '8px 16px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}
+            >
+              <Plus size={14} /> Agregar y Validar Proyecto
             </button>
           </div>
         </div>

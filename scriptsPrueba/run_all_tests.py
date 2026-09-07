@@ -17,6 +17,7 @@ import test_api_endpoints
 import test_architecture_and_bq_persistence
 import test_security_and_rbac
 import test_multidataset_costs_errors
+import test_security_multiproject_crud_budget
 
 def execute_all():
     print("=" * 70)
@@ -36,7 +37,8 @@ def execute_all():
         ("Endpoints REST y Telemetría de la API", test_api_endpoints),
         ("Introspección de Arquitectura y Persistencia BigQuery", test_architecture_and_bq_persistence),
         ("Seguridad, RBAC y Validación de Dominio Liverpool", test_security_and_rbac),
-        ("Multi-Dataset BigQuery, Costos IA y Gestión Errores", test_multidataset_costs_errors)
+        ("Multi-Dataset BigQuery, Costos IA y Gestión Errores", test_multidataset_costs_errors),
+        ("Seguridad, Multi-Proyecto GCP, CRUD Usuarios y Presupuesto IA", test_security_multiproject_crud_budget)
     ]:
         print(f"\n--- Ejecutando: {name} ---")
         try:

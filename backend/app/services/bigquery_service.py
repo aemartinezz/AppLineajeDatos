@@ -39,6 +39,17 @@ class BigQueryService:
         self.status_store: Dict[str, Dict[str, Any]] = {}
         self.model_usage_store: List[ModelUsageLog] = []
         self.errors_store: Dict[str, AppError] = {}
+        self.users_store: Dict[str, Dict[str, Any]] = {
+            "aemartinezz@liverpool.com.mx": {
+                "email": "aemartinezz@liverpool.com.mx",
+                "name": "Argos Eyra Martinez Zeferino",
+                "roles": ["Admin", "Developer"],
+                "status": "ACTIVE",
+                "created_at": datetime.utcnow().isoformat(),
+                "updated_at": datetime.utcnow().isoformat(),
+                "last_login": datetime.utcnow().isoformat()
+            }
+        }
         self.cached_config: AppConfig = current_app_config
         self._cached_graph: Optional[LineageGraph] = None
         self._cached_graph_time: float = 0.0
@@ -210,14 +221,16 @@ class BigQueryService:
             logger.error(f"Excepción persistiendo en BigQuery: {e}")
 
     def get_full_graph(self, min_confidence: float = 0.0) -> LineageGraph:
-        """Fusiona el linaje externo con la metadata nativa de BigQuery con caché ultrarrápida."""
+        """Fusiona el linaje externo con la metadata nativa de BigQuery sobre todos los proyectos monitoreados."""
         now = time.time()
         if self._cached_graph is None or (now - self._cached_graph_time > self._cache_ttl_seconds):
-            # 1. Obtener linaje nativo de BigQuery
+            # 1. Obtener linaje nativo de BigQuery sobre todos los proyectos configurados
+            monitored_projs = self.cached_config.storage_config.monitored_projects or [settings.GCP_PROJECT_ID]
             bq_data = BigQueryMetadataExtractor.get_native_lineage(
                 project_id=settings.GCP_PROJECT_ID,
                 dataset_id=settings.BQ_DATASET,
-                bq_client=self.bq_client
+                bq_client=self.bq_client,
+                project_ids=monitored_projs
             )
 
             # 2. Fusionar con LineageLinker
@@ -235,13 +248,19 @@ class BigQueryService:
         # 3. Filtrar aristas por umbral de certeza
         filtered_edges = [e for e in full_graph.edges if e.confidence_score >= min_confidence]
 
-        # Retener solo nodos conectados si se filtra
+        # Retener nodos conectados + todas las tablas y datasets BigQuery descubiertos (evitar que queden ocultos)
         connected_node_ids = set()
         for e in filtered_edges:
             connected_node_ids.add(e.source_id)
             connected_node_ids.add(e.target_id)
 
-        filtered_nodes = [n for n in full_graph.nodes if n.id in connected_node_ids or len(filtered_edges) == 0]
+        if min_confidence <= 0.0:
+            filtered_nodes = full_graph.nodes
+        else:
+            filtered_nodes = [
+                n for n in full_graph.nodes
+                if n.id in connected_node_ids or n.tool_type == ToolType.BIGQUERY or len(filtered_edges) == 0
+            ]
 
         return LineageGraph(
             nodes=filtered_nodes,
@@ -315,15 +334,7 @@ class BigQueryService:
     def list_users(self) -> List[Dict[str, Any]]:
         """Lista los usuarios corporativos registrados en app_users_roles."""
         if not self.bq_client:
-            return [
-                {
-                    "email": "aemartinezz@liverpool.com.mx",
-                    "name": "Argos Eyra Martinez Zeferino",
-                    "roles": ["Admin", "Developer"],
-                    "status": "ACTIVE",
-                    "last_login": datetime.utcnow().isoformat()
-                }
-            ]
+            return list(self.users_store.values())
 
         table_ref = f"{settings.GCP_PROJECT_ID}.{settings.BQ_DATASET}.app_users_roles"
         query = f"SELECT email, name, roles, status, created_at, updated_at, last_login FROM `{table_ref}` ORDER BY created_at DESC"
@@ -343,7 +354,7 @@ class BigQueryService:
             return users
         except Exception as e:
             logger.error(f"Error listando usuarios de BigQuery: {e}")
-            return []
+            return list(self.users_store.values())
 
     def upsert_user(self, email: str, name: str, roles: List[str], status: str = "ACTIVE") -> Dict[str, Any]:
         """Crea o actualiza los roles de un usuario corporativo (restringido a @liverpool.com.mx)."""
@@ -353,6 +364,14 @@ class BigQueryService:
 
         if not roles:
             roles = ["Viewer"]
+
+        user_data = {
+            "email": email_clean,
+            "name": name,
+            "roles": roles,
+            "status": status,
+            "updated_at": datetime.utcnow().isoformat()
+        }
 
         if self.bq_client:
             table_ref = f"{settings.GCP_PROJECT_ID}.{settings.BQ_DATASET}.app_users_roles"
@@ -378,13 +397,56 @@ class BigQueryService:
             )
             self.bq_client.query(query, job_config=job_config).result()
 
-        return {
-            "email": email_clean,
-            "name": name,
-            "roles": roles,
-            "status": status,
-            "updated_at": datetime.utcnow().isoformat()
-        }
+        self.users_store[email_clean] = user_data
+        return user_data
+
+    def delete_user(self, email: str) -> bool:
+        """Elimina un usuario corporativo de BigQuery app_users_roles."""
+        email_clean = email.strip().lower()
+        if email_clean == "aemartinezz@liverpool.com.mx":
+            raise ValueError("Acción denegada: El Administrador Principal corporativo no puede ser eliminado.")
+
+        if self.bq_client:
+            try:
+                table_ref = f"{settings.GCP_PROJECT_ID}.{settings.BQ_DATASET}.app_users_roles"
+                query = f"DELETE FROM `{table_ref}` WHERE email = @email"
+                job_config = bigquery.QueryJobConfig(
+                    query_parameters=[bigquery.ScalarQueryParameter("email", "STRING", email_clean)]
+                )
+                self.bq_client.query(query, job_config=job_config).result()
+            except Exception as e:
+                logger.error(f"Error al eliminar usuario en BigQuery: {e}")
+
+        if email_clean in self.users_store:
+            del self.users_store[email_clean]
+        return True
+
+    def update_user_status(self, email: str, status: str) -> Dict[str, Any]:
+        """Actualiza el estado de un usuario ('ACTIVE' o 'INACTIVE')."""
+        email_clean = email.strip().lower()
+        if email_clean == "aemartinezz@liverpool.com.mx" and status != "ACTIVE":
+            raise ValueError("Acción denegada: El Administrador Principal corporativo debe permanecer siempre ACTIVO.")
+
+        if self.bq_client:
+            try:
+                table_ref = f"{settings.GCP_PROJECT_ID}.{settings.BQ_DATASET}.app_users_roles"
+                query = f"UPDATE `{table_ref}` SET status = @status, updated_at = CURRENT_TIMESTAMP() WHERE email = @email"
+                job_config = bigquery.QueryJobConfig(
+                    query_parameters=[
+                        bigquery.ScalarQueryParameter("email", "STRING", email_clean),
+                        bigquery.ScalarQueryParameter("status", "STRING", status),
+                    ]
+                )
+                self.bq_client.query(query, job_config=job_config).result()
+            except Exception as e:
+                logger.error(f"Error al actualizar estado en BigQuery: {e}")
+
+        if email_clean in self.users_store:
+            self.users_store[email_clean]["status"] = status
+            self.users_store[email_clean]["updated_at"] = datetime.utcnow().isoformat()
+            return self.users_store[email_clean]
+
+        return {"email": email_clean, "status": status, "updated_at": datetime.utcnow().isoformat()}
 
     def authenticate_user(self, email: str, name: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -533,15 +595,18 @@ class BigQueryService:
                         cost_by_m[r.model_name] = round(r.total_cost, 6)
                         tok_by_m[r.model_name] = r.total_input + r.total_output
 
-                    pct = (tot_cost / 50.0) * 100.0
+                    budget_limit = getattr(self.cached_config.models_settings, "monthly_budget_usd", 50.0) or 50.0
+                    alert_thresh = getattr(self.cached_config.models_settings, "alert_threshold_pct", 80.0) or 80.0
+                    pct = (tot_cost / budget_limit) * 100.0 if budget_limit > 0 else 0.0
+
                     return ModelCostSummary(
                         total_cost_usd=round(tot_cost, 6),
                         total_input_tokens=tot_in,
                         total_output_tokens=tot_out,
                         total_calls=tot_calls,
-                        budget_limit_usd=50.0,
+                        budget_limit_usd=budget_limit,
                         budget_consumed_percentage=round(pct, 2),
-                        alert_triggered=pct >= 80.0,
+                        alert_triggered=pct >= alert_thresh,
                         cost_by_model=cost_by_m,
                         tokens_by_model=tok_by_m,
                         last_updated=datetime.utcnow()
@@ -559,15 +624,18 @@ class BigQueryService:
             cost_by_m[u.model_name] = round(cost_by_m.get(u.model_name, 0.0) + u.cost_usd, 6)
             tok_by_m[u.model_name] = tok_by_m.get(u.model_name, 0) + u.input_tokens + u.output_tokens
 
-        pct = (tot_cost / 50.0) * 100.0
+        budget_limit = getattr(self.cached_config.models_settings, "monthly_budget_usd", 50.0) or 50.0
+        alert_thresh = getattr(self.cached_config.models_settings, "alert_threshold_pct", 80.0) or 80.0
+        pct = (tot_cost / budget_limit) * 100.0 if budget_limit > 0 else 0.0
+
         return ModelCostSummary(
             total_cost_usd=round(tot_cost, 6),
             total_input_tokens=tot_in,
             total_output_tokens=tot_out,
             total_calls=len(self.model_usage_store),
-            budget_limit_usd=50.0,
+            budget_limit_usd=budget_limit,
             budget_consumed_percentage=round(pct, 2),
-            alert_triggered=pct >= 80.0,
+            alert_triggered=pct >= alert_thresh,
             cost_by_model=cost_by_m,
             tokens_by_model=tok_by_m,
             last_updated=datetime.utcnow()
@@ -583,10 +651,13 @@ class BigQueryService:
         message: str,
         stack_trace: Optional[str] = None,
         component: str = "BACKEND",
-        severity: str = "WARNING"
+        severity: str = "WARNING",
+        url: Optional[str] = None,
+        user_agent: Optional[str] = None,
+        context_data: Optional[Dict[str, Any]] = None
     ) -> AppError:
         """
-        Registra un error agrupado por hash.
+        Registra un error agrupado por hash con telemetría técnica enriquecida.
         Si ya existía en estado RESOLVED y vuelve a ocurrir, se REABRE automáticamente a OPEN.
         """
         norm_msg = message[:120].strip()
@@ -653,6 +724,12 @@ class BigQueryService:
             if stack_trace:
                 existing.stack_trace = stack_trace
             existing.severity = severity
+            if url:
+                existing.url = url
+            if user_agent:
+                existing.user_agent = user_agent
+            if context_data:
+                existing.context_data = context_data
             return existing
         else:
             new_err = AppError(
@@ -662,6 +739,9 @@ class BigQueryService:
                 stack_trace=stack_trace,
                 component=component,
                 severity=severity,
+                url=url,
+                user_agent=user_agent,
+                context_data=context_data,
                 occurrence_count=1,
                 first_seen=now,
                 last_seen=now,

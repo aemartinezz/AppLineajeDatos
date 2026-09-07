@@ -18,76 +18,84 @@ class BigQueryMetadataExtractor:
         cls,
         project_id: str,
         dataset_id: str,
-        bq_client: Optional[bigquery.Client] = None
+        bq_client: Optional[bigquery.Client] = None,
+        project_ids: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """
         Retorna los nodos y aristas generados por las tablas, vistas y datasets nativos de BigQuery.
-        Si bq_client está activo y conectado, escanea dinámicamente todos los datasets reales.
+        Soporta escaneo multi-proyecto dinámico sobre todos los project_ids configurados.
         """
+        projects_to_scan = project_ids if project_ids and len(project_ids) > 0 else [project_id]
+
         if bq_client is not None:
             try:
-                return cls._extract_real_bigquery_metadata(bq_client, project_id, dataset_id)
+                return cls._extract_real_bigquery_metadata(bq_client, projects_to_scan, dataset_id)
             except Exception as e:
                 logger.error(f"Error escaneando metadatos reales de BigQuery: {e}. Usando fallback representativo.")
 
-        return cls._get_mock_fallback_lineage(dataset_id)
+        return cls._get_mock_fallback_lineage(dataset_id, projects_to_scan)
 
     @classmethod
     def _extract_real_bigquery_metadata(
         cls,
         client: bigquery.Client,
-        project_id: str,
+        project_ids: List[str],
         system_dataset_id: str
     ) -> Dict[str, Any]:
         nodes: List[LineageNode] = []
         edges: List[LineageEdge] = []
         node_ids = set()
 
-        # 1. Listar todos los datasets del proyecto
-        datasets = list(client.list_datasets(project=project_id))
-        logger.info(f"BigQuery: {len(datasets)} datasets descubiertos en {project_id}.")
-
-        for d in datasets:
-            ds_id = d.dataset_id
-            is_internal_system = (ds_id == system_dataset_id)
-
+        for project_id in project_ids:
             try:
-                tables = list(client.list_tables(d.reference))
-                for t in tables:
-                    table_id = t.table_id
-                    full_id = f"BIGQUERY:{ds_id}.{table_id}"
-                    if full_id in node_ids:
-                        continue
+                # 1. Listar todos los datasets del proyecto
+                datasets = list(client.list_datasets(project=project_id))
+                logger.info(f"BigQuery: {len(datasets)} datasets descubiertos en proyecto {project_id}.")
 
-                    # Determinar capa según el tipo o nombre
-                    table_type = t.table_type or "TABLE"
-                    if "VIEW" in table_type:
-                        layer = "ANALYTICS"
-                    elif is_internal_system:
-                        layer = "METADATA_SYSTEM"
-                    elif "stg" in table_id.lower() or "raw" in table_id.lower():
-                        layer = "INGESTION"
-                    else:
-                        layer = "STORAGE"
+                for d in datasets:
+                    ds_id = d.dataset_id
+                    is_internal_system = (ds_id == system_dataset_id)
 
-                    node = LineageNode(
-                        id=full_id,
-                        name=f"{ds_id}.{table_id}",
-                        tool_type=ToolType.BIGQUERY,
-                        layer=layer,
-                        metadata={
-                            "dataset": ds_id,
-                            "table_id": table_id,
-                            "table_type": table_type,
-                            "project_id": project_id,
-                            "is_system": is_internal_system
-                        }
-                    )
-                    nodes.append(node)
-                    node_ids.add(full_id)
+                    try:
+                        tables = list(client.list_tables(d.reference))
+                        for t in tables:
+                            table_id = t.table_id
+                            full_id = f"BIGQUERY:{ds_id}.{table_id}"
+                            if full_id in node_ids:
+                                continue
 
-            except Exception as ex:
-                logger.warning(f"No se pudieron listar tablas del dataset {ds_id}: {ex}")
+                            # Determinar capa según el tipo o nombre
+                            table_type = t.table_type or "TABLE"
+                            if "VIEW" in table_type:
+                                layer = "ANALYTICS"
+                            elif is_internal_system:
+                                layer = "METADATA_SYSTEM"
+                            elif "stg" in table_id.lower() or "raw" in table_id.lower():
+                                layer = "INGESTION"
+                            else:
+                                layer = "STORAGE"
+
+                            node = LineageNode(
+                                id=full_id,
+                                name=f"{ds_id}.{table_id}",
+                                tool_type=ToolType.BIGQUERY,
+                                layer=layer,
+                                metadata={
+                                    "dataset": ds_id,
+                                    "table_id": table_id,
+                                    "table_type": table_type,
+                                    "project_id": project_id,
+                                    "is_system": is_internal_system
+                                }
+                            )
+                            nodes.append(node)
+                            node_ids.add(full_id)
+
+                    except Exception as ex:
+                        logger.warning(f"No se pudieron listar tablas del dataset {ds_id} en {project_id}: {ex}")
+
+            except Exception as proj_err:
+                logger.warning(f"No se pudo acceder a datasets del proyecto {project_id} ({proj_err}). Verifique permisos de Service Account.")
 
         # 2. Conectar tablas de negocio (ej. pruebasLineaje.ejemplotabla1) con linaje
         target_example = "BIGQUERY:pruebasLineaje.ejemplotabla1"
@@ -138,11 +146,11 @@ class BigQueryMetadataExtractor:
         except Exception as q_err:
             logger.debug(f"JOBS_BY_USER no disponible o sin registros: {q_err}")
 
-        logger.info(f"BigQuery Metadata Extractor: {len(nodes)} nodos y {len(edges)} aristas generadas dinámicamente.")
+        logger.info(f"BigQuery Metadata Extractor: {len(nodes)} nodos y {len(edges)} aristas generadas dinámicamente sobre {len(project_ids)} proyectos.")
         return {"nodes": nodes, "edges": edges}
 
     @classmethod
-    def _get_mock_fallback_lineage(cls, dataset_id: str) -> Dict[str, Any]:
+    def _get_mock_fallback_lineage(cls, dataset_id: str, project_ids: Optional[List[str]] = None) -> Dict[str, Any]:
         """Fallback local enriquecido con las tablas reales de GCP (incluyendo pruebasLineaje.ejemplotabla1)."""
         nodes: List[LineageNode] = [
             LineageNode(

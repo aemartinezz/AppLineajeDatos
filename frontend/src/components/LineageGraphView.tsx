@@ -38,7 +38,7 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
   const containerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<cytoscape.Core | null>(null);
 
-  const [minConfidence, setMinConfidence] = useState<number>(0.50);
+  const [minConfidence, setMinConfidence] = useState<number>(0.0);
   const [totalNodes, setTotalNodes] = useState<number>(0);
   const [totalEdges, setTotalEdges] = useState<number>(0);
   const [allNodes, setAllNodes] = useState<NodeData[]>([]);
@@ -59,13 +59,31 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
     try {
       setLoading(true);
       const res = await fetch(`/api/lineage/graph?min_confidence=${confidence}`);
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}: Fallo al consultar grafo de linaje`);
+      }
       const data = await res.json();
       setTotalNodes(data.total_nodes);
       setTotalEdges(data.total_edges);
-      setAllNodes(data.nodes);
-      renderCytoscape(data.nodes, data.edges);
-    } catch (err) {
+      setAllNodes(data.nodes || []);
+      renderCytoscape(data.nodes || [], data.edges || []);
+    } catch (err: any) {
       console.error("Error al cargar grafo de linaje:", err);
+      // Reporte automático al backend para la consola de errores
+      fetch('/api/errors/report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          error_type: err.name || 'GraphFetchError',
+          message: err.message || 'Error de red o procesamiento al consultar grafo de linaje',
+          stack_trace: err.stack || '',
+          component: 'FRONTEND:LineageGraphView',
+          severity: 'WARNING',
+          url: window.location.href,
+          user_agent: navigator.userAgent,
+          context_data: { confidence }
+        })
+      }).catch(() => {});
     } finally {
       setLoading(false);
     }
@@ -213,11 +231,27 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
     });
 
     cyRef.current = cy;
+
+    // Asegurar centrado y ajuste automático tras el cálculo del layout
+    setTimeout(() => {
+      if (cyRef.current) {
+        cyRef.current.resize();
+        cyRef.current.fit(undefined, 40);
+      }
+    }, 150);
   };
 
-  // Conexión a WebSocket para telemetría en tiempo real
+  // Conexión a WebSocket para telemetría en tiempo real y listeners de ventana
   useEffect(() => {
     fetchGraph(minConfidence);
+
+    const handleWindowResize = () => {
+      if (cyRef.current) {
+        cyRef.current.resize();
+        cyRef.current.fit(undefined, 40);
+      }
+    };
+    window.addEventListener('resize', handleWindowResize);
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.host}/ws/telemetry`;
@@ -247,6 +281,7 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
     };
 
     return () => {
+      window.removeEventListener('resize', handleWindowResize);
       ws.close();
       if (cyRef.current) {
         cyRef.current.destroy();
@@ -350,7 +385,7 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
           </span>
           <input
             type="range"
-            min="0.50"
+            min="0.0"
             max="1.0"
             step="0.05"
             value={minConfidence}

@@ -1,8 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Users, UserPlus, Shield, ShieldCheck, Check, AlertCircle, RefreshCw, X, Trash2 } from 'lucide-react';
+import { 
+  Users, UserPlus, Shield, ShieldCheck, Check, AlertCircle, RefreshCw, 
+  X, Trash2, UserX, UserCheck, Loader2, AlertTriangle
+} from 'lucide-react';
 
 interface UserRecord {
-  email: str;
+  email: string;
   name: string;
   roles: string[];
   status: string;
@@ -18,6 +21,8 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ userRole
   const [users, setUsers] = useState<UserRecord[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [showAddModal, setShowAddModal] = useState<boolean>(false);
+  const [deleteConfirmUser, setDeleteConfirmUser] = useState<UserRecord | null>(null);
+  const [updatingEmail, setUpdatingEmail] = useState<string | null>(null);
 
   // Form state
   const [newEmail, setNewEmail] = useState<string>('');
@@ -77,6 +82,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ userRole
       }
 
       setSuccessMsg(`Colaborador ${emailTrim} guardado exitosamente en BigQuery app_users_roles.`);
+      setTimeout(() => setSuccessMsg(null), 3500);
       setNewEmail('');
       setNewName('');
       setNewRoles(['Viewer']);
@@ -98,6 +104,8 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ userRole
   };
 
   const handleQuickRoleChange = async (user: UserRecord, targetRole: string) => {
+    if (updatingEmail) return; // Prevenir doble clic
+
     let updatedRoles = user.roles.includes(targetRole)
       ? user.roles.filter(r => r !== targetRole)
       : [...user.roles, targetRole];
@@ -105,7 +113,8 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ userRole
     if (updatedRoles.length === 0) updatedRoles = ['Viewer'];
 
     try {
-      await fetch('/api/users', {
+      setUpdatingEmail(user.email);
+      const res = await fetch('/api/users', {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
@@ -118,9 +127,72 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ userRole
           status: user.status
         })
       });
-      fetchUsers();
+
+      if (res.ok) {
+        setSuccessMsg(`Roles de ${user.email} actualizados a [${updatedRoles.join(', ')}] en BigQuery.`);
+        setTimeout(() => setSuccessMsg(null), 3000);
+        await fetchUsers();
+      }
     } catch (err) {
       console.error("Error al actualizar rol:", err);
+    } finally {
+      setUpdatingEmail(null);
+    }
+  };
+
+  const handleStatusToggle = async (user: UserRecord) => {
+    if (updatingEmail) return;
+    const nextStatus = user.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE';
+
+    try {
+      setUpdatingEmail(user.email);
+      const res = await fetch(`/api/users/${encodeURIComponent(user.email)}/status`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-role': userRole
+        },
+        body: JSON.stringify({ status: nextStatus })
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || 'Error al cambiar estado');
+      }
+
+      setSuccessMsg(`Estado de ${user.email} cambiado a ${nextStatus} en BigQuery.`);
+      setTimeout(() => setSuccessMsg(null), 3000);
+      await fetchUsers();
+    } catch (err: any) {
+      setErrorMsg(err.message);
+      setTimeout(() => setErrorMsg(null), 4000);
+    } finally {
+      setUpdatingEmail(null);
+    }
+  };
+
+  const handleDeleteUser = async (email: string) => {
+    try {
+      setUpdatingEmail(email);
+      const res = await fetch(`/api/users/${encodeURIComponent(email)}`, {
+        method: 'DELETE',
+        headers: { 'x-user-role': userRole }
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || 'Error al eliminar colaborador');
+      }
+
+      setSuccessMsg(`Colaborador ${email} eliminado definitivamente de BigQuery.`);
+      setTimeout(() => setSuccessMsg(null), 3500);
+      setDeleteConfirmUser(null);
+      await fetchUsers();
+    } catch (err: any) {
+      setErrorMsg(err.message);
+      setTimeout(() => setErrorMsg(null), 4000);
+    } finally {
+      setUpdatingEmail(null);
     }
   };
 
@@ -185,53 +257,131 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ userRole
               <th style={{ padding: '14px 18px', fontWeight: 600 }}>Roles Asignados (Clic para alternar)</th>
               <th style={{ padding: '14px 18px', fontWeight: 600 }}>Estado</th>
               <th style={{ padding: '14px 18px', fontWeight: 600 }}>Último Acceso</th>
+              <th style={{ padding: '14px 18px', fontWeight: 600, textAlign: 'center' }}>Acciones CRUD</th>
             </tr>
           </thead>
           <tbody>
-            {users.map((u) => (
-              <tr key={u.email} style={{ borderBottom: '1px solid #F1F5F9' }}>
-                <td style={{ padding: '14px 18px', fontWeight: 700, color: '#0F172A' }}>
-                  {u.name}
-                </td>
-                <td style={{ padding: '14px 18px', fontFamily: 'monospace', color: '#475569' }}>
-                  {u.email}
-                </td>
-                <td style={{ padding: '14px 18px' }}>
-                  <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                    {availableRoles.map((r) => {
-                      const hasRole = u.roles.includes(r);
-                      return (
+            {users.map((u) => {
+              const isRootAdmin = u.email.toLowerCase() === 'aemartinezz@liverpool.com.mx';
+              const isUpdatingThis = updatingEmail === u.email;
+              const isActive = u.status === 'ACTIVE';
+
+              return (
+                <tr key={u.email} style={{ borderBottom: '1px solid #F1F5F9', backgroundColor: isActive ? 'transparent' : '#FFFDF5' }}>
+                  <td style={{ padding: '14px 18px', fontWeight: 700, color: '#0F172A' }}>
+                    {u.name}
+                    {isRootAdmin && (
+                      <span className="badge" style={{ marginLeft: '8px', fontSize: '10px', backgroundColor: '#FAF0F5', color: '#731853' }}>
+                        Admin Principal
+                      </span>
+                    )}
+                  </td>
+                  <td style={{ padding: '14px 18px', fontFamily: 'monospace', color: '#475569' }}>
+                    {u.email}
+                  </td>
+                  <td style={{ padding: '14px 18px' }}>
+                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
+                      {availableRoles.map((r) => {
+                        const hasRole = u.roles.includes(r);
+                        return (
+                          <button
+                            key={r}
+                            disabled={isUpdatingThis}
+                            onClick={() => handleQuickRoleChange(u, r)}
+                            style={{
+                              fontSize: '11px',
+                              fontWeight: 600,
+                              padding: '3px 8px',
+                              borderRadius: '6px',
+                              cursor: isUpdatingThis ? 'not-allowed' : 'pointer',
+                              border: hasRole ? '1px solid #731853' : '1px solid #CBD5E1',
+                              backgroundColor: hasRole ? '#FAF0F5' : '#FFFFFF',
+                              color: hasRole ? '#731853' : '#94A3B8',
+                              opacity: isUpdatingThis ? 0.6 : 1,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '3px'
+                            }}
+                            title={`Alternar rol ${r}`}
+                          >
+                            {hasRole && <Check size={11} />}
+                            {r}
+                          </button>
+                        );
+                      })}
+                      {isUpdatingThis && (
+                        <span style={{ fontSize: '11px', color: '#731853', display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
+                          <Loader2 size={12} className="animate-spin" /> Guardando...
+                        </span>
+                      )}
+                    </div>
+                  </td>
+                  <td style={{ padding: '14px 18px' }}>
+                    <span 
+                      className="badge" 
+                      style={{ 
+                        backgroundColor: isActive ? '#DCFCE7' : '#FEF3C7', 
+                        color: isActive ? '#15803D' : '#D97706', 
+                        fontSize: '11px', 
+                        fontWeight: 700 
+                      }}
+                    >
+                      {isActive ? '● ACTIVO' : '○ INACTIVO'}
+                    </span>
+                  </td>
+                  <td style={{ padding: '14px 18px', color: '#94A3B8', fontSize: '12px' }}>
+                    {u.last_login ? new Date(u.last_login).toLocaleString() : 'Pendiente'}
+                  </td>
+                  <td style={{ padding: '14px 18px', textAlign: 'center' }}>
+                    {isRootAdmin ? (
+                      <span style={{ fontSize: '11px', color: '#94A3B8', fontStyle: 'italic' }}>
+                        Protegido
+                      </span>
+                    ) : (
+                      <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
                         <button
-                          key={r}
-                          onClick={() => handleQuickRoleChange(u, r)}
+                          disabled={isUpdatingThis}
+                          onClick={() => handleStatusToggle(u)}
+                          className="btn-secondary"
                           style={{
                             fontSize: '11px',
-                            fontWeight: 600,
-                            padding: '3px 8px',
-                            borderRadius: '6px',
-                            cursor: 'pointer',
-                            border: hasRole ? '1px solid #731853' : '1px solid #CBD5E1',
-                            backgroundColor: hasRole ? '#FAF0F5' : '#FFFFFF',
-                            color: hasRole ? '#731853' : '#94A3B8',
+                            padding: '4px 8px',
+                            color: isActive ? '#D97706' : '#15803D',
+                            borderColor: isActive ? '#FCD34D' : '#86EFAC',
+                            backgroundColor: isActive ? '#FFFBEB' : '#F0FDF4',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '4px'
                           }}
-                          title={`Alternar rol ${r}`}
+                          title={isActive ? 'Dar de baja temporalmente' : 'Reactivar acceso corporativo'}
                         >
-                          {hasRole && '✓ '}{r}
+                          {isActive ? <><UserX size={12} /> Dar de Baja</> : <><UserCheck size={12} /> Reactivar</>}
                         </button>
-                      );
-                    })}
-                  </div>
-                </td>
-                <td style={{ padding: '14px 18px' }}>
-                  <span className="badge" style={{ backgroundColor: '#DCFCE7', color: '#15803D', fontSize: '11px', fontWeight: 700 }}>
-                    {u.status}
-                  </span>
-                </td>
-                <td style={{ padding: '14px 18px', color: '#94A3B8', fontSize: '12px' }}>
-                  {u.last_login ? new Date(u.last_login).toLocaleString() : 'Pendiente'}
-                </td>
-              </tr>
-            ))}
+
+                        <button
+                          disabled={isUpdatingThis}
+                          onClick={() => setDeleteConfirmUser(u)}
+                          className="btn-secondary"
+                          style={{
+                            fontSize: '11px',
+                            padding: '4px 8px',
+                            color: '#DC2626',
+                            borderColor: '#FECACA',
+                            backgroundColor: '#FEF2F2',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '4px'
+                          }}
+                          title="Eliminar permanentemente de BigQuery"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -348,6 +498,63 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ userRole
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Confirmación para Eliminar Usuario */}
+      {deleteConfirmUser && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0,0,0,0.55)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000,
+          backdropFilter: 'blur(3px)'
+        }}>
+          <div style={{
+            backgroundColor: '#FFFFFF',
+            borderRadius: '12px',
+            width: '100%',
+            maxWidth: '460px',
+            padding: '24px',
+            boxShadow: '0 20px 25px -5px rgba(0,0,0,0.15)'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px', color: '#DC2626' }}>
+              <AlertTriangle size={24} />
+              <h3 style={{ fontSize: '17px', fontWeight: 800, margin: 0, color: '#111827' }}>
+                ¿Eliminar Colaborador?
+              </h3>
+            </div>
+
+            <p style={{ fontSize: '13px', color: '#4B5563', lineHeight: '1.5', marginBottom: '20px' }}>
+              Se eliminará permanentemente a <b>{deleteConfirmUser.name}</b> (<code>{deleteConfirmUser.email}</code>) de la tabla <code>applineajedatos.app_users_roles</code> en Google BigQuery. Esta acción no se puede deshacer.
+            </p>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button
+                type="button"
+                onClick={() => setDeleteConfirmUser(null)}
+                className="btn-outline"
+                style={{ padding: '8px 16px', fontSize: '13px' }}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDeleteUser(deleteConfirmUser.email)}
+                disabled={updatingEmail === deleteConfirmUser.email}
+                className="btn-primary"
+                style={{ padding: '8px 20px', fontSize: '13px', backgroundColor: '#DC2626', borderColor: '#DC2626' }}
+              >
+                {updatingEmail === deleteConfirmUser.email ? 'Eliminando...' : 'Sí, Eliminar de BigQuery'}
+              </button>
+            </div>
           </div>
         </div>
       )}

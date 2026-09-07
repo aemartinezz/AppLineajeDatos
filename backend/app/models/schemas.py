@@ -84,6 +84,8 @@ class ModelConfig(BaseModel):
     escalate_confidence_threshold: float = 0.85
     advanced_model_name: str = "gemini-1.5-pro"
     advanced_temperature: float = 0.1
+    monthly_budget_usd: float = 50.0
+    alert_threshold_pct: float = 80.0
 
 class StorageConfig(BaseModel):
     inbox_bucket: str = "gs://lineage-inbox"
@@ -91,6 +93,7 @@ class StorageConfig(BaseModel):
     quarantine_bucket: str = "gs://lineage-quarantine"
     gcp_project_id: str = "crp-poc-it-hackathon-13"
     bq_dataset: str = "lineage_metadata"
+    monitored_projects: List[str] = Field(default_factory=lambda: ["crp-poc-it-hackathon-13"])
 
 class AppConfig(BaseModel):
     app_name: str = "Plataforma de Linaje End-to-End"
@@ -110,6 +113,9 @@ class UserUpsertRequest(BaseModel):
     name: str
     roles: List[str]
     status: str = "ACTIVE"
+
+class UserStatusUpdateRequest(BaseModel):
+    status: str
 
 class ModelUsageLog(BaseModel):
     id: str
@@ -141,6 +147,9 @@ class AppError(BaseModel):
     stack_trace: Optional[str] = None
     component: str = "BACKEND"
     severity: str = "WARNING"  # CRITICAL, WARNING, INFO
+    url: Optional[str] = None
+    user_agent: Optional[str] = None
+    context_data: Optional[Dict[str, Any]] = None
     occurrence_count: int = 1
     first_seen: datetime = Field(default_factory=datetime.utcnow)
     last_seen: datetime = Field(default_factory=datetime.utcnow)
@@ -153,9 +162,27 @@ class ErrorResolveRequest(BaseModel):
 
 class ErrorReportRequest(BaseModel):
     error_type: str
-    message: str
+    message: Optional[str] = None
+    error_message: Optional[str] = None
     stack_trace: Optional[str] = None
     component: str = "FRONTEND"
     severity: str = "WARNING"
+    url: Optional[str] = None
+    user_agent: Optional[str] = None
+    context_data: Optional[Dict[str, Any]] = None
+
+    def get_effective_message(self) -> str:
+        return self.message or self.error_message or "Error sin descripción"
+
+class GcpProjectValidationRequest(BaseModel):
+    project_id: str
+
+class GcpProjectValidationResponse(BaseModel):
+    project_id: str
+    is_valid: bool
+    message: str
+    datasets_found: List[str] = []
+    tables_count: int = 0
+
 
 

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { TopMegaMenu } from './components/TopMegaMenu';
 import { LineageGraphView } from './components/LineageGraphView';
 import { NodeInspectorDrawer } from './components/NodeInspectorDrawer';
@@ -25,6 +25,70 @@ export const App: React.FC = () => {
   const [isSimulating, setIsSimulating] = useState<boolean>(false);
   const [simulatedRoleName, setSimulatedRoleName] = useState<string>('');
   const [isSimulationModalOpen, setIsSimulationModalOpen] = useState<boolean>(false);
+
+  // Captura y reporte global de errores en Frontend hacia /api/errors/report
+  useEffect(() => {
+    const handleGlobalError = (event: ErrorEvent) => {
+      try {
+        fetch('/api/errors/report', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            error_type: 'FRONTEND_UNHANDLED_EXCEPTION',
+            error_message: event.message || 'Error no controlado en interfaz React',
+            component: 'FRONTEND:UI',
+            severity: 'CRITICAL',
+            stack_trace: event.error?.stack || `at ${event.filename}:${event.lineno}:${event.colno}`,
+            url: window.location.href,
+            user_agent: navigator.userAgent,
+            context_data: {
+              filename: event.filename,
+              lineno: event.lineno,
+              colno: event.colno,
+              activeTab,
+              userRole
+            }
+          })
+        }).catch(() => {});
+      } catch (e) {
+        // Silencioso para evitar recursión de errores
+      }
+    };
+
+    const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
+      try {
+        const reason = event.reason;
+        fetch('/api/errors/report', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            error_type: 'FRONTEND_PROMISE_REJECTION',
+            error_message: reason?.message || String(reason) || 'Promesa asíncrona rechazada sin catch',
+            component: 'FRONTEND:AsyncPromise',
+            severity: 'WARNING',
+            stack_trace: reason?.stack || 'No stack trace disponible',
+            url: window.location.href,
+            user_agent: navigator.userAgent,
+            context_data: {
+              reason: String(reason),
+              activeTab,
+              userRole
+            }
+          })
+        }).catch(() => {});
+      } catch (e) {
+        // Silencioso
+      }
+    };
+
+    window.addEventListener('error', handleGlobalError);
+    window.addEventListener('unhandledrejection', handleUnhandledRejection);
+
+    return () => {
+      window.removeEventListener('error', handleGlobalError);
+      window.removeEventListener('unhandledrejection', handleUnhandledRejection);
+    };
+  }, [activeTab, userRole]);
 
   const handleApplySimulation = (role: string, displayName: string) => {
     setUserRole(role);
