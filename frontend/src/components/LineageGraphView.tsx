@@ -4,7 +4,7 @@ import cytoscape from 'cytoscape';
 import dagre from 'cytoscape-dagre';
 import { 
   Sliders, RefreshCw, ZoomIn, ZoomOut, Maximize2, 
-  Search, ArrowLeft, ArrowRight, RotateCcw, Info, X
+  Search, ArrowLeft, ArrowRight, RotateCcw, Info, X, LayoutGrid
 } from 'lucide-react';
 
 if (typeof cytoscape('core', 'dagre') === 'undefined') {
@@ -77,6 +77,82 @@ const formatNodeBox = (toolType: string, rawName: string) => {
   return { label, nodeWidth, nodeHeight, textMaxWidth };
 };
 
+// Motor de Re-layout Adaptativo para organizar armónicamente los nodos visibles
+const relayoutVisibleElements = (
+  cy: cytoscape.Core,
+  preferredLayout?: 'auto' | 'grid' | 'dagre'
+) => {
+  const visibleNodes = cy.nodes(':visible');
+  if (visibleNodes.length === 0) return;
+
+  const visibleEdges = cy.edges(':visible');
+  const visibleElements = visibleNodes.union(visibleEdges);
+
+  const nodeCount = visibleNodes.length;
+  const edgeCount = visibleEdges.length;
+
+  // Si hay varios nodos con pocas o ninguna arista entre sí (ej. 76 tablas BigQuery o jobs desconectados),
+  // se organizan en una cuadrícula rectangular armoniosa (Grid) en lugar de una lista vertical infinita.
+  const isCatalog =
+    preferredLayout === 'grid' ||
+    (preferredLayout !== 'dagre' && (
+      edgeCount === 0 || (nodeCount > 3 && edgeCount / nodeCount < 0.25)
+    ));
+
+  let layoutOptions: any;
+
+  if (isCatalog) {
+    // Proporción rectangular apaisada (similar a 16:9 / 4:3)
+    // Para 76 tablas: cols = 9 o 10 (9 columnas x 8-9 filas)
+    // Para 2 jobs DataStage: cols = 2 (2 side-by-side)
+    // Para 3 scripts Shell: cols = 3 (3 side-by-side)
+    const cols = Math.min(10, Math.max(2, Math.ceil(Math.sqrt(nodeCount * 1.6))));
+    layoutOptions = {
+      name: 'grid',
+      fit: true,
+      padding: 45,
+      cols: cols,
+      avoidOverlap: true,
+      nodeDimensionsIncludeLabels: true,
+      animate: true,
+      animationDuration: 350,
+      animationEasing: 'ease-in-out-cubic',
+    };
+  } else {
+    // Para pipelines y linajes conectados: Layout jerárquico Dagre de izquierda a derecha
+    layoutOptions = {
+      name: 'dagre',
+      // @ts-ignore
+      rankDir: 'LR',
+      nodeSep: 50,
+      rankSep: 90,
+      fit: true,
+      padding: 45,
+      animate: true,
+      animationDuration: 350,
+      animationEasing: 'ease-in-out-cubic',
+    };
+  }
+
+  try {
+    const layout = visibleElements.layout(layoutOptions);
+    layout.run();
+  } catch (err) {
+    console.warn("Fallback de layout activado:", err);
+    try {
+      const fallback = visibleElements.layout({
+        name: isCatalog ? 'grid' : 'cose',
+        animate: false,
+        fit: true,
+        padding: 40,
+      });
+      fallback.run();
+    } catch (e) {
+      cy.fit(visibleElements, 40);
+    }
+  }
+};
+
 export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<cytoscape.Core | null>(null);
@@ -132,7 +208,7 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
     }
   };
 
-  // Filtrar y enfocar por tecnología (ocultando estrictamente los demás componentes)
+  // Filtrar y enfocar por tecnología (ocultando estrictamente los demás componentes y recalculando layout)
   const handleFilterByTech = (tech: string) => {
     setSelectedTechFilter(tech);
     const cy = cyRef.current;
@@ -143,13 +219,12 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
     setLineageMode('NONE');
 
     if (tech === 'TODOS') {
-      cy.elements().show();
-      cy.fit(undefined, 40);
+      cy.batch(() => {
+        cy.elements().show();
+      });
+      relayoutVisibleElements(cy, 'dagre');
       return;
     }
-
-    // Mostrar todo primero para aplicar el nuevo filtro
-    cy.elements().show();
 
     let matchingNodes = cy.nodes();
 
@@ -162,13 +237,16 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
       matchingNodes = matchingNodes.filter((ele) => ele.data('tool_type') === tech);
     }
 
-    // Ocultar TODO lo que NO pertenezca a este tipo de elementos
     const nonMatchingNodes = cy.nodes().not(matchingNodes);
-    nonMatchingNodes.hide();
 
-    if (matchingNodes.length > 0) {
-      cy.fit(matchingNodes, 50);
-    }
+    // Ocultar elementos ajenos y mostrar coincidentes en un solo batch atómico
+    cy.batch(() => {
+      cy.elements().show();
+      nonMatchingNodes.hide();
+    });
+
+    // Recalcular layout adaptativo: grid para catálogos como BigQuery o Dagre para pipelines
+    relayoutVisibleElements(cy);
   };
 
   const renderCytoscape = (nodes: NodeData[], edges: EdgeData[]) => {
@@ -400,7 +478,7 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
     }
   };
 
-  // Función para filtrar y aislar el linaje de un componente (ocultando todo lo demás)
+  // Función para filtrar y aislar el linaje de un componente (ocultando todo lo demás y recalculando el flujo)
   const applyLineageFilter = (query: string, mode: 'UPSTREAM' | 'DOWNSTREAM' | 'FULL') => {
     const cy = cyRef.current;
     if (!cy) return;
@@ -447,12 +525,14 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
       lineageCollection = lineageCollection.add(preds).add(succs);
     }
 
-    // 3. Ocultar TODO lo que NO pertenezca al linaje seleccionado
-    cy.elements().hide();
-    lineageCollection.show();
+    // 3. Ocultar TODO lo que NO pertenezca al linaje seleccionado en batch
+    cy.batch(() => {
+      cy.elements().hide();
+      lineageCollection.show();
+    });
 
-    // 4. Centrar y reajustar cámara sobre el linaje visible
-    cy.fit(lineageCollection, 60);
+    // 4. Re-calcular layout del linaje conectado de izquierda a derecha (Dagre)
+    relayoutVisibleElements(cy, 'dagre');
 
     // Seleccionar visualmente los nodos coincidentes
     targetNodes.select();
@@ -461,7 +541,6 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
   const clearLineageFilter = () => {
     const cy = cyRef.current;
     if (cy) {
-      cy.elements().show();
       // Si hay un filtro de tecnología activo diferente a 'TODOS', reaplicarlo
       if (selectedTechFilter !== 'TODOS') {
         let matchingNodes = cy.nodes();
@@ -473,12 +552,16 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
         } else {
           matchingNodes = matchingNodes.filter((ele) => ele.data('tool_type') === selectedTechFilter);
         }
-        cy.nodes().not(matchingNodes).hide();
-        if (matchingNodes.length > 0) {
-          cy.fit(matchingNodes, 50);
-        }
+        cy.batch(() => {
+          cy.elements().show();
+          cy.nodes().not(matchingNodes).hide();
+        });
+        relayoutVisibleElements(cy);
       } else {
-        cy.fit(undefined, 40);
+        cy.batch(() => {
+          cy.elements().show();
+        });
+        relayoutVisibleElements(cy, 'dagre');
       }
     }
     setLineageMode('NONE');
@@ -742,6 +825,17 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
           >
             <Maximize2 size={15} />
             Centrar
+          </button>
+
+          {/* Botón Reorganizar Layout */}
+          <button
+            className="btn-secondary"
+            onClick={() => cyRef.current && relayoutVisibleElements(cyRef.current)}
+            title="Reorganizar y alinear nodos visibles en pantalla"
+            style={{ padding: '6px 10px', display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', fontWeight: 600 }}
+          >
+            <LayoutGrid size={15} />
+            Reorganizar
           </button>
 
           <button
