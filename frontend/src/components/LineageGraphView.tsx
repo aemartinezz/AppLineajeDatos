@@ -34,6 +34,49 @@ interface LineageGraphViewProps {
   onSelectNode: (node: NodeData) => void;
 }
 
+// Formateo inteligente de cajas de nodos para evitar desbordamientos de texto
+const formatNodeBox = (toolType: string, rawName: string) => {
+  const maxLineChars = 22;
+  const rawTokens = rawName.split(/([._\-\/:]+)/);
+  const formattedLines: string[] = [];
+  let currentLine = '';
+
+  for (const token of rawTokens) {
+    if (!token) continue;
+    if ((currentLine + token).length > maxLineChars && currentLine.length > 0) {
+      formattedLines.push(currentLine);
+      currentLine = token;
+    } else {
+      currentLine += token;
+    }
+  }
+  if (currentLine) {
+    formattedLines.push(currentLine);
+  }
+
+  const cleanLines: string[] = [];
+  for (const line of formattedLines) {
+    if (line.length <= 26) {
+      cleanLines.push(line);
+    } else {
+      for (let i = 0; i < line.length; i += 22) {
+        cleanLines.push(line.slice(i, i + 22));
+      }
+    }
+  }
+
+  const allLines = [toolType, ...cleanLines];
+  const maxChars = Math.max(...allLines.map(l => l.length));
+
+  const nodeWidth = Math.min(320, Math.max(160, Math.round(maxChars * 7.5 + 36)));
+  const nodeHeight = Math.max(65, Math.round((cleanLines.length + 1) * 16 + 28));
+  const textMaxWidth = nodeWidth - 22;
+
+  const label = `${toolType}\n${cleanLines.join('\n')}`;
+
+  return { label, nodeWidth, nodeHeight, textMaxWidth };
+};
+
 export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<cytoscape.Core | null>(null);
@@ -89,19 +132,25 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
     }
   };
 
-  // Filtrar y enfocar por tecnología
+  // Filtrar y enfocar por tecnología (ocultando estrictamente los demás componentes)
   const handleFilterByTech = (tech: string) => {
     setSelectedTechFilter(tech);
     const cy = cyRef.current;
     if (!cy) return;
 
+    // Reiniciar búsqueda específica de nodo si estaba activa
+    setSelectedSearchNodeId('');
+    setLineageMode('NONE');
+
     if (tech === 'TODOS') {
-      cy.elements().removeClass('faded');
+      cy.elements().show();
       cy.fit(undefined, 40);
       return;
     }
 
-    cy.elements().addClass('faded');
+    // Mostrar todo primero para aplicar el nuevo filtro
+    cy.elements().show();
+
     let matchingNodes = cy.nodes();
 
     if (tech === 'OTROS') {
@@ -113,13 +162,12 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
       matchingNodes = matchingNodes.filter((ele) => ele.data('tool_type') === tech);
     }
 
-    // Incluir aristas conectadas entre nodos coincidentes o incidentes
-    const incidentEdges = matchingNodes.connectedEdges();
-    const activeCollection = matchingNodes.union(incidentEdges);
+    // Ocultar TODO lo que NO pertenezca a este tipo de elementos
+    const nonMatchingNodes = cy.nodes().not(matchingNodes);
+    nonMatchingNodes.hide();
 
-    activeCollection.removeClass('faded');
     if (matchingNodes.length > 0) {
-      cy.fit(activeCollection, 50);
+      cy.fit(matchingNodes, 50);
     }
   };
 
@@ -167,10 +215,15 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
         if (n.status === 'RUNNING') statusColor = '#0284C7'; // RUNNING (Azul)
         if (n.status === 'FAILED') statusColor = '#C62828';  // ERROR (Rojo)
 
+        const { label, nodeWidth, nodeHeight, textMaxWidth } = formatNodeBox(n.tool_type, n.name);
+
         return {
           data: {
             id: n.id,
-            label: `${n.tool_type}\n${n.name}`,
+            label: label,
+            nodeWidth: nodeWidth,
+            nodeHeight: nodeHeight,
+            textMaxWidth: textMaxWidth,
             tool_type: n.tool_type,
             statusColor: statusColor,
             nodeRaw: n,
@@ -211,14 +264,15 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
               'border-color': 'data(statusColor)',
               'label': 'data(label)',
               'color': '#1F2937',
-              'font-size': '11px',
-              'font-weight': 'bold',
+              'font-size': '10px',
+              'font-weight': '600',
               'text-valign': 'center',
               'text-halign': 'center',
               'text-wrap': 'wrap',
-              'text-max-width': '125px',
-              'width': '145px',
-              'height': '65px',
+              'text-max-width': 'data(textMaxWidth)',
+              'width': 'data(nodeWidth)',
+              'height': 'data(nodeHeight)',
+              'padding': '6px',
             } as any,
           },
           {
@@ -252,8 +306,8 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
           name: 'dagre',
           // @ts-ignore
           rankDir: 'LR',
-          nodeSep: 45,
-          rankSep: 80,
+          nodeSep: 55,
+          rankSep: 95,
         },
       });
 
@@ -346,46 +400,86 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
     }
   };
 
-  // Función para filtrar linaje upstream / downstream a partir de un nodo
-  const applyLineageFilter = (nodeId: string, mode: 'UPSTREAM' | 'DOWNSTREAM' | 'FULL') => {
+  // Función para filtrar y aislar el linaje de un componente (ocultando todo lo demás)
+  const applyLineageFilter = (query: string, mode: 'UPSTREAM' | 'DOWNSTREAM' | 'FULL') => {
     const cy = cyRef.current;
-    if (!cy || !nodeId) return;
+    if (!cy) return;
 
-    const targetNode = cy.getElementById(nodeId);
-    if (targetNode.length === 0) return;
+    const trimmed = query.trim();
+    if (!trimmed) {
+      clearLineageFilter();
+      return;
+    }
+
+    // 1. Localizar el nodo objetivo (por ID exacto o coincidencia por nombre/ID)
+    let targetNodes = cy.getElementById(trimmed);
+    if (targetNodes.length === 0) {
+      const qLower = trimmed.toLowerCase();
+      targetNodes = cy.nodes().filter((ele) => {
+        const raw = ele.data('nodeRaw');
+        const name = (raw?.name || '').toLowerCase();
+        const id = ele.id().toLowerCase();
+        return name.includes(qLower) || id.includes(qLower);
+      });
+    }
+
+    if (targetNodes.length === 0) {
+      return;
+    }
 
     setLineageMode(mode);
 
-    // Marcar todos como atenuados
-    cy.elements().addClass('faded');
-
-    let collection = cy.collection().add(targetNode);
+    // 2. Extraer colección de linaje según el modo
+    let lineageCollection = cy.collection().add(targetNodes);
 
     if (mode === 'UPSTREAM') {
-      // Hacia atrás: predecesores
-      const preds = targetNode.predecessors();
-      collection = collection.add(preds);
+      // Predecesores (origen / ingesta)
+      const preds = targetNodes.predecessors();
+      lineageCollection = lineageCollection.add(preds);
     } else if (mode === 'DOWNSTREAM') {
-      // Hacia adelante: sucesores
-      const succs = targetNode.successors();
-      collection = collection.add(succs);
+      // Sucesores (consumo / destino)
+      const succs = targetNodes.successors();
+      lineageCollection = lineageCollection.add(succs);
     } else if (mode === 'FULL') {
-      // Ambos sentidos
-      const preds = targetNode.predecessors();
-      const succs = targetNode.successors();
-      collection = collection.add(preds).add(succs);
+      // Ambos sentidos (flujo completo de impacto)
+      const preds = targetNodes.predecessors();
+      const succs = targetNodes.successors();
+      lineageCollection = lineageCollection.add(preds).add(succs);
     }
 
-    collection.removeClass('faded');
-    cy.center(targetNode);
-    cy.zoom(1.1);
+    // 3. Ocultar TODO lo que NO pertenezca al linaje seleccionado
+    cy.elements().hide();
+    lineageCollection.show();
+
+    // 4. Centrar y reajustar cámara sobre el linaje visible
+    cy.fit(lineageCollection, 60);
+
+    // Seleccionar visualmente los nodos coincidentes
+    targetNodes.select();
   };
 
   const clearLineageFilter = () => {
     const cy = cyRef.current;
     if (cy) {
-      cy.elements().removeClass('faded');
-      cy.fit(undefined, 40);
+      cy.elements().show();
+      // Si hay un filtro de tecnología activo diferente a 'TODOS', reaplicarlo
+      if (selectedTechFilter !== 'TODOS') {
+        let matchingNodes = cy.nodes();
+        if (selectedTechFilter === 'OTROS') {
+          matchingNodes = matchingNodes.filter((ele) => {
+            const t = ele.data('tool_type');
+            return !['BIGQUERY', 'DATASTAGE', 'AIRFLOW_COMPOSER', 'CONTROL_M', 'SHELL'].includes(t);
+          });
+        } else {
+          matchingNodes = matchingNodes.filter((ele) => ele.data('tool_type') === selectedTechFilter);
+        }
+        cy.nodes().not(matchingNodes).hide();
+        if (matchingNodes.length > 0) {
+          cy.fit(matchingNodes, 50);
+        }
+      } else {
+        cy.fit(undefined, 40);
+      }
     }
     setLineageMode('NONE');
     setSelectedSearchNodeId('');
@@ -539,6 +633,21 @@ export const LineageGraphView: React.FC<LineageGraphViewProps> = ({ onSelectNode
                 title="Ver linaje hacia adelante (consumo / destino)"
               >
                 Destino <ArrowRight size={13} />
+              </button>
+
+              <button
+                onClick={() => applyLineageFilter(selectedSearchNodeId, 'FULL')}
+                className="btn-secondary"
+                style={{
+                  padding: '4px 8px',
+                  fontSize: '11px',
+                  backgroundColor: lineageMode === 'FULL' ? '#FAF0F5' : '#FFF',
+                  borderColor: lineageMode === 'FULL' ? '#731853' : '#D1D5DB',
+                  color: lineageMode === 'FULL' ? '#731853' : '#374151'
+                }}
+                title="Ver linaje completo (origen y destino)"
+              >
+                Todo
               </button>
 
               <button
