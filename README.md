@@ -47,46 +47,303 @@ Este repositorio cuenta con un **sistema de gobernanza exhaustivo** obligatorio 
 
 ---
 
-## 2. Guía de Despliegue en Cualquier Proyecto de GCP
+## 2. Guía Maestra de Instalación y Despliegue en Nuevos Proyectos de GCP (Principio de Menor Privilegio)
 
-El script `deploy/deploy_gcp.sh` es parametrizado e idempotente. Puede ejecutarse en cualquier proyecto de Google Cloud con un solo comando.
+Esta guía detalla el procedimiento completo y exacto para desplegar la plataforma en **cualquier proyecto corporativo de Google Cloud Platform**, cumpliendo con los estándares de ciberseguridad corporativos y evitando terminantemente roles amplios de superadministrador (`roles/owner`, `roles/editor`, `roles/bigquery.admin` o `roles/storage.admin`).
 
-### 2.1. Permisos y Roles IAM Requeridos
+> [!IMPORTANT]
+> **Diferenciación Fundamental de Identidades (Dos conceptos completamente diferentes):**
+> 1. **Identidad del Operador / Ingeniero DevOps / CI-CD que Despliega:** El usuario o workflow que ejecuta los comandos de compilación y despliegue (`gcloud builds submit`, `gcloud run deploy`).
+> 2. **Service Account de Ejecución del Backend (`sa-applineaje-backend`):** La identidad que el contenedor de Cloud Run asume en segundo plano para autenticarse contra BigQuery, Vertex AI y Cloud Storage mediante **Application Default Credentials (ADC)** sin usar llaves JSON ni contraseñas.
 
-#### A. Roles para el Usuario Implementador (quien ejecuta el despliegue):
-* `roles/run.admin` (Crear y administrar servicios de Cloud Run)
-* `roles/storage.admin` (Crear buckets y gestionar objetos en Cloud Storage)
-* `roles/bigquery.admin` (Crear datasets, tablas y consultar metadatos)
-* `roles/cloudbuild.builds.editor` (Compilar contenedores en Cloud Build)
-* `roles/artifactregistry.admin` (Almacenar imágenes de contenedor)
-* `roles/iam.serviceAccountUser` (Asignar la Service Account por defecto a Cloud Run)
-* `roles/serviceusage.serviceUsageAdmin` (Habilitar las APIs requeridas)
+---
 
-#### B. Roles para la Service Account de Ejecución de Cloud Run:
-*(Por defecto `[PROJECT_NUMBER]-compute@developer.gserviceaccount.com`)*
-* `roles/bigquery.dataEditor` y `roles/bigquery.jobUser` (o `roles/bigquery.admin`)
-* `roles/storage.objectAdmin` (sobre los buckets de inbox y procesados)
-* `roles/aiplatform.user` (para invocar Gemini Flash / Pro en Vertex AI)
-* `roles/logging.logWriter` (emisión de logs y trazas)
+### 2.1. Estrategia de Menor Privilegio: Pre-Aprovisionamiento (Día 0)
 
-### 2.2. APIs de GCP que el Script Habilita Automáticamente:
-1. `run.googleapis.com` (Cloud Run)
-2. `cloudbuild.googleapis.com` (Cloud Build)
-3. `artifactregistry.googleapis.com` (Artifact Registry)
-4. `bigquery.googleapis.com` (Google BigQuery)
-5. `storage.googleapis.com` (Google Cloud Storage)
-6. `aiplatform.googleapis.com` (Vertex AI para Gemini)
-7. `logging.googleapis.com` (Cloud Logging)
-8. `pubsub.googleapis.com` (Cloud Pub/Sub)
+Para evitar que el operador que despliega necesite permisos elevados de administración (`roles/storage.admin` o `roles/bigquery.admin`), la infraestructura base se **pre-aprovisiona una sola vez**. De esta manera, el usuario que compila y despliega solo requiere permisos operativos sobre Cloud Run y Cloud Build.
 
-### 2.3. Ejecución del Despliegue:
-```bash
-# Sintaxis:
-./deploy/deploy_gcp.sh [PROJECT_ID] [REGION] [BQ_DATASET] [INBOX_BUCKET] [PROCESSED_BUCKET]
-
-# Ejemplo para el proyecto del hackathon:
-./deploy/deploy_gcp.sh crp-poc-it-hackathon-13 us-central1 applineajedatos datosdeentrada datosprocesadosapp
+```mermaid
+flowchart TD
+    subgraph Pre["Día 0: Pre-Aprovisionamiento Base"]
+        B["1. Facturación Activa"] --> APIs["2. Habilitar APIs"]
+        APIs --> BK["3. Crear Buckets GCS"]
+        APIs --> DS["4. Crear Dataset BigQuery"]
+        APIs --> SA["5. Crear Service Account Dedicada"]
+    end
+    subgraph IAM["Asignación de Roles de Menor Privilegio"]
+        SA --> PermSA["Roles SA: BQ Editor, AI User, Storage ObjectAdmin"]
+        DevOps["Operador DevOps"] --> PermOp["Roles Operador: Run Developer, SA User, Build Editor"]
+    end
+    subgraph Deploy["Despliegue Cloud Run"]
+        PermOp --> CR_BE["Backend: adjunta sa-applineaje-backend"]
+        PermOp --> CR_FE["Frontend: proxy Nginx hacia backend"]
+    end
 ```
+
+---
+
+### 2.2. Paso 0: Prerrequisitos Previos de Infraestructura (Día 0)
+
+Ejecute estos comandos en su terminal con una cuenta que tenga permisos de gestión inicial en el proyecto destino:
+
+#### A. Definir Variables del Entorno
+```bash
+export PROJECT_ID="tu-proyecto-gcp"                     # Identificador del proyecto GCP
+export REGION="us-central1"                             # Región para Cloud Run y Storage
+export BQ_DATASET="applineajedatos"                     # Dataset maestro de la aplicación
+export INBOX_BUCKET="${PROJECT_ID}-inbox"               # Bucket para depositar logs/scripts
+export PROCESSED_BUCKET="${PROJECT_ID}-processed"       # Bucket de histórico procesado
+export QUARANTINE_BUCKET="${PROJECT_ID}-quarantine"     # Bucket para archivos fallidos
+export SA_NAME="sa-applineaje-backend"                  # Nombre de la Service Account
+export SA_EMAIL="${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
+```
+
+#### B. Verificar Cuenta de Facturación Activa (Billing)
+Cloud Run, Cloud Build, Artifact Registry y Vertex AI exigen obligatoriamente facturación habilitada:
+```bash
+# Verificar si el proyecto tiene facturación asociada
+gcloud billing projects describe "$PROJECT_ID"
+
+# Si no está vinculado, asociar a la cuenta de facturación corporativa:
+# gcloud billing projects link "$PROJECT_ID" --billing-account="TU-BILLING-ACCOUNT-ID"
+```
+
+#### C. Habilitar APIs Esenciales de GCP
+```bash
+gcloud services enable \
+  run.googleapis.com \
+  cloudbuild.googleapis.com \
+  artifactregistry.googleapis.com \
+  bigquery.googleapis.com \
+  storage.googleapis.com \
+  aiplatform.googleapis.com \
+  logging.googleapis.com \
+  pubsub.googleapis.com \
+  --project="$PROJECT_ID"
+```
+
+> [!NOTE]
+> `aiplatform.googleapis.com` es indispensable para que los agentes de Gemini 1.5 Flash y Gemini 1.5 Pro en Vertex AI puedan ser invocados en el pipeline de inferencia semántica.
+
+#### D. Pre-crear Dataset de BigQuery
+```bash
+bq mk --dataset \
+  --location="$REGION" \
+  --description="Dataset maestro de linaje, usuarios y configuraciones" \
+  "$PROJECT_ID:$BQ_DATASET"
+```
+
+#### E. Pre-crear Buckets de Google Cloud Storage
+```bash
+# Bucket Inbox para ingesta continua
+gcloud storage buckets create "gs://$INBOX_BUCKET" \
+  --project="$PROJECT_ID" --location="$REGION" --uniform-bucket-level-access
+
+# Bucket Processed para histórico analizado
+gcloud storage buckets create "gs://$PROCESSED_BUCKET" \
+  --project="$PROJECT_ID" --location="$REGION" --uniform-bucket-level-access
+
+# Bucket Quarantine para anomalías
+gcloud storage buckets create "gs://$QUARANTINE_BUCKET" \
+  --project="$PROJECT_ID" --location="$REGION" --uniform-bucket-level-access
+```
+
+#### F. Crear Service Account Dedicada para el Backend
+```bash
+gcloud iam service-accounts create "$SA_NAME" \
+  --display-name="SA Backend Linaje End-to-End" \
+  --project="$PROJECT_ID"
+```
+
+---
+
+### 2.3. Paso 1: Configuración de Roles de Menor Privilegio para la Service Account (`sa-applineaje-backend`)
+
+La Service Account que corre el contenedor backend **NO requiere roles Owner ni Editor**. Se le asignan únicamente los roles estrictamente indispensables delimitados por recurso:
+
+```bash
+# 1. Nivel Proyecto: Consultas SQL en BigQuery, Inferencia Gemini y Cloud Logging
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+  --member="serviceAccount:$SA_EMAIL" \
+  --role="roles/bigquery.jobUser"
+
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+  --member="serviceAccount:$SA_EMAIL" \
+  --role="roles/aiplatform.user"
+
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+  --member="serviceAccount:$SA_EMAIL" \
+  --role="roles/logging.logWriter"
+
+# 2. Nivel Proyecto / Dataset: Permisos de lectura/escritura sobre el Dataset de la App
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+  --member="serviceAccount:$SA_EMAIL" \
+  --role="roles/bigquery.dataEditor"
+
+# 3. Nivel Buckets: Permisos de objetos exclusivamente sobre los buckets de la aplicación
+gcloud storage buckets add-iam-policy-binding "gs://$INBOX_BUCKET" \
+  --member="serviceAccount:$SA_EMAIL" \
+  --role="roles/storage.objectAdmin"
+
+gcloud storage buckets add-iam-policy-binding "gs://$PROCESSED_BUCKET" \
+  --member="serviceAccount:$SA_EMAIL" \
+  --role="roles/storage.objectAdmin"
+
+gcloud storage buckets add-iam-policy-binding "gs://$QUARANTINE_BUCKET" \
+  --member="serviceAccount:$SA_EMAIL" \
+  --role="roles/storage.objectAdmin"
+```
+
+> [!IMPORTANT]
+> **Detalle del Permiso para Agentes Gemini:**
+> El rol asignado para interactuar con Gemini 1.5 Flash y Pro es estrictamente **`roles/aiplatform.user`** (permiso `aiplatform.endpoints.predict`). Permite invocar predicciones sin facultades para alterar modelos ni administrar recursos de IA. **`roles/aiplatform.admin` está terminantemente prohibido.**
+
+---
+
+### 2.4. Paso 2: Permisos Mínimos Requeridos para el Operador o CI/CD que Despliega
+
+El ingeniero DevOps o cuenta de CI/CD que ejecuta el despliegue **NO necesita ser `Owner` ni `Editor`**. Solo requiere los siguientes 4 roles:
+
+```bash
+USER_OR_CICD="user:tu-correo@liverpool.com.mx"
+
+# 1. Administrar y desplegar servicios en Cloud Run (roles/run.developer o roles/run.admin)
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+  --member="$USER_OR_CICD" \
+  --role="roles/run.admin"
+
+# 2. Compilar contenedores en Google Cloud Build
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+  --member="$USER_OR_CICD" \
+  --role="roles/cloudbuild.builds.editor"
+
+# 3. Subir imágenes Docker a Container Registry / Artifact Registry
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+  --member="$USER_OR_CICD" \
+  --role="roles/artifactregistry.writer"
+
+# 4. Autorización para adjuntar la Service Account dedicada al backend (actAs)
+# ¡QUIRÚRGICO! Concedido únicamente sobre la Service Account específica, no sobre el proyecto:
+gcloud iam service-accounts add-iam-policy-binding "$SA_EMAIL" \
+  --member="$USER_OR_CICD" \
+  --role="roles/iam.serviceAccountUser"
+```
+
+---
+
+### 2.5. Paso 3: Inicialización de Tablas DDL en BigQuery
+
+La plataforma se apoya en 7 tablas maestras en BigQuery. Ejecute el inicializador de base de datos desde el entorno virtual de Python:
+
+```bash
+USE_MOCK_GCP=false PYTHONPATH=backend python3 -c "
+from app.services.init_db import init_bigquery_tables
+res = init_bigquery_tables(project_id='$PROJECT_ID', dataset_id='$BQ_DATASET')
+print('Resultado:', res)
+"
+```
+
+Las 7 tablas aseguradas automáticamente son:
+1. `lineage_nodes`: Catálogo maestro de entidades y componentes descubiertos.
+2. `lineage_edges`: Relaciones de linaje, scoring de certeza y método de inferencia.
+3. `execution_status_daily`: Telemetría diaria y estados de ejecución.
+4. `app_configurations`: Configuración persistente (modelos de IA, presupuesto, umbrales).
+5. `app_users_roles`: Catálogo corporativo de usuarios RBAC (`@liverpool.com.mx`).
+6. `app_model_usage_logs`: Auditoría de consumo de tokens y costos en dólares.
+7. `app_errors_log`: Registro enriquecido de incidencias y trazas técnicas.
+
+---
+
+### 2.6. Paso 4: Despliegue de los Servicios en Cloud Run
+
+#### Opción A: Despliegue Automatizado con Script
+El repositorio incluye el script parametrizado [`deploy/deploy_gcp.sh`](deploy/deploy_gcp.sh):
+
+```bash
+./deploy/deploy_gcp.sh \
+  "$PROJECT_ID" \
+  "$REGION" \
+  "$BQ_DATASET" \
+  "$INBOX_BUCKET" \
+  "$PROCESSED_BUCKET" \
+  "$SA_NAME"
+```
+
+#### Opción B: Despliegue Manual Paso a Paso
+
+**1. Compilar y Desplegar Backend FastAPI:**
+```bash
+# Compilar imagen backend
+gcloud builds submit backend --tag "gcr.io/${PROJECT_ID}/applineaje-backend:latest" --project="$PROJECT_ID"
+
+# Desplegar en Cloud Run con Service Account dedicada
+gcloud run deploy applineaje-backend \
+  --image="gcr.io/${PROJECT_ID}/applineaje-backend:latest" \
+  --region="$REGION" \
+  --project="$PROJECT_ID" \
+  --platform=managed \
+  --allow-unauthenticated \
+  --service-account="$SA_EMAIL" \
+  --set-env-vars="GCP_PROJECT_ID=$PROJECT_ID,BQ_DATASET=$BQ_DATASET,GCS_INBOX_BUCKET=$INBOX_BUCKET,GCS_PROCESSED_BUCKET=$PROCESSED_BUCKET,GCS_QUARANTINE_BUCKET=$QUARANTINE_BUCKET,GCP_SERVICE_ACCOUNT=$SA_EMAIL,USE_MOCK_GCP=false"
+
+# Obtener URL del backend desplegado
+BACKEND_URL=$(gcloud run services describe applineaje-backend --region="$REGION" --project="$PROJECT_ID" --format='value(status.url)')
+echo "Backend activo en: $BACKEND_URL"
+```
+
+**2. Configurar y Desplegar Frontend React (Nginx Reverse Proxy):**
+```bash
+BACKEND_HOST=$(echo "$BACKEND_URL" | sed -e 's|^[^/]*//||' -e 's|/.*$||')
+
+# Configurar el proxy_pass de Nginx apuntando al host activo del backend
+sed -i.bak "s|proxy_pass https://[^;]*;|proxy_pass https://$BACKEND_HOST;|g" frontend/nginx.conf
+sed -i.bak "s|proxy_set_header Host [^;]*;|proxy_set_header Host $BACKEND_HOST;|g" frontend/nginx.conf
+rm -f frontend/nginx.conf.bak
+
+# Compilar imagen frontend
+gcloud builds submit frontend --tag "gcr.io/${PROJECT_ID}/applineaje-frontend:latest" --project="$PROJECT_ID"
+
+# Desplegar en Cloud Run
+gcloud run deploy applineaje-frontend \
+  --image="gcr.io/${PROJECT_ID}/applineaje-frontend:latest" \
+  --region="$REGION" \
+  --project="$PROJECT_ID" \
+  --platform=managed \
+  --allow-unauthenticated
+
+FRONTEND_URL=$(gcloud run services describe applineaje-frontend --region="$REGION" --project="$PROJECT_ID" --format='value(status.url)')
+echo "Frontend activo en: $FRONTEND_URL"
+```
+
+---
+
+### 2.7. Paso 5: Verificación y Smoke Testing en Producción
+
+Valide empíricamente la operatividad de los servicios:
+
+```bash
+# 1. Health Check del Backend vía Frontend Proxy:
+curl -s "${FRONTEND_URL}/api/health"
+# Respuesta esperada: {"status":"healthy","gcp_project":"...","mode":"GCP_CONNECTED"}
+
+# 2. Validación de Acceso al Dataset de BigQuery:
+curl -s -X POST "${FRONTEND_URL}/api/gcp/validate-dataset" \
+  -H "Content-Type: application/json" \
+  -d "{\"dataset_name\": \"$BQ_DATASET\"}"
+# Respuesta esperada: {"is_valid": true, "tables_count": 7}
+
+# 3. Consulta de Grafo de Linaje persistido:
+curl -s "${FRONTEND_URL}/api/lineage/graph?min_confidence=0" | jq '{total_nodes, total_edges}'
+```
+
+---
+
+### 2.8. Gestión de Secretos y Credenciales: ¿Por qué NO se requiere Secret Manager?
+
+La plataforma implementa la arquitectura recomendada por Google Cloud de **cero secretos almacenados (Secretless Architecture)**:
+- **Sin contraseñas ni llaves en disco:** No se generan ni se descargan Service Account Keys (`.json`).
+- **Autenticación Nativa por Metadatos:** El backend corre dentro de Cloud Run asumiendo automáticamente la identidad de `sa-applineaje-backend` mediante el servidor de metadatos de GCP (`http://metadata.google.internal`).
+- Las librerías cliente (`google-cloud-bigquery`, `google-cloud-storage`, `httpx` hacia Vertex AI) obtienen y rotan automáticamente sus Bearer Tokens cada hora sin intervención manual ni costo adicional de Secret Manager.
 
 ---
 
