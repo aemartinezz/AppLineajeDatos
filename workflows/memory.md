@@ -24,6 +24,7 @@ Este documento constituye la **memoria viva del proyecto**. Registra todas las d
 - **ADR-016:** Recolector Multi-Fuente de Linaje BigQuery (Vistas, Rutinas y Tablas Externas con SQLGlot)
 - **ADR-017:** Principio de Menor Privilegio IAM, Service Account Dedicada y Parametrización Total de Datasets y Recursos GCP
 - **ADR-018:** Integración Vertex AI Gemini, Permisos de Menor Privilegio y Prerrequisitos de Despliegue Día 0
+- **ADR-019:** Arquitectura Secretless y Separación Quirúrgica de Identidades IAM (Operador DevOps vs Service Account Runtime)
 
 ---
 
@@ -256,5 +257,19 @@ Este documento constituye la **memoria viva del proyecto**. Registra todas las d
      - Comandos para la pre-creación del dataset en BigQuery y los buckets en Google Cloud Storage.
 - **Impacto:** Conexión real con la inteligencia artificial de Google Cloud, protección ante caídas o falta de cuota mediante fallback determinista, cumplimiento corporativo riguroso de menor privilegio y guía integral de aprovisionamiento reproducible para cualquier entorno empresarial.
 
+---
 
+### ADR-019: Arquitectura Secretless y Separación Quirúrgica de Identidades IAM (Operador DevOps vs Service Account Runtime)
 
+- **Contexto:** Al documentar y estandarizar la replicación del proyecto en múltiples proyectos corporativos de Google Cloud, surgía la duda recurrente de si se requería Google Cloud Secret Manager para almacenar llaves de API o credenciales de Service Account, y existía confusión entre los permisos requeridos por el colaborador u operador de CI/CD que compila y despliega frente a la Service Account que ejecuta el contenedor en Cloud Run.
+- **Decisión:**
+  1. **Arquitectura Secretless (Cero Secretos Almacenados):**
+     - La plataforma adopta la arquitectura recomendada por Google Cloud sin almacenamiento de secretos ni archivos de llaves `.json` (`gcloud iam service-accounts keys create` está prohibido).
+     - El contenedor backend de Cloud Run asume la identidad de `sa-applineaje-backend` mediante el servidor de metadatos interno de GCP (`http://metadata.google.internal`), y las librerías oficiales de Google Cloud obtienen y rotan automáticamente tokens OAuth Bearer cada hora a costo cero.
+     - **No se requiere ni se aprovisiona Google Cloud Secret Manager.**
+  2. **Separación Quirúrgica de Identidades IAM:**
+     - **Operador DevOps / Pipeline CI/CD:** Solo requiere permisos para compilar imágenes y gestionar el servicio Cloud Run (`roles/run.admin` o `roles/run.developer`, `roles/cloudbuild.builds.editor`, `roles/artifactregistry.writer`) y el permiso para actuar como la Service Account (`roles/iam.serviceAccountUser`) **concedido quirúrgicamente sobre la Service Account específica y no a nivel de proyecto**. No tiene acceso a los datos de BigQuery ni de los buckets.
+     - **Service Account de Runtime (`sa-applineaje-backend`):** Solo tiene permisos de ejecución sobre los recursos acotados: `roles/bigquery.jobUser`, `roles/aiplatform.user` (para Gemini en Vertex AI), `roles/logging.logWriter`, `roles/bigquery.dataEditor` sobre `BQ_DATASET` y `roles/storage.objectAdmin` sobre los buckets de la app.
+  3. **Incorporación en `README.md` y Documentación Maestra:**
+     - Se integró la guía completa paso a paso con variables parametrizadas, comandos listos para copiar, diagrama Mermaid explicativo y smoke tests en la Sección 2 de `README.md`.
+- **Impacto:** Eliminación total del riesgo de fuga de credenciales estáticas, reducción de costos en infraestructura (sin Secret Manager) y cumplimiento estricto del principio de menor privilegio requerido por la seguridad corporativa de Liverpool.
